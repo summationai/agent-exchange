@@ -79,6 +79,7 @@ type bridge struct {
 	active              bool
 	toolsListed         bool
 	bootstrapped        bool
+	discovered          chan struct{}
 }
 
 func (b *bridge) emit(p packet) error {
@@ -167,7 +168,7 @@ func (b *bridge) connectLoop() {
 		b.mu.Lock()
 		s := b.session
 		b.mu.Unlock()
-		e = c.call("ax.connect", object{"version": "1", "agent_id": s.ID, "secret": s.Secret}, nil)
+		e = c.call("ax.connect", object{"version": "1", "agent_id": s.ID, "secret": s.Secret, "lifecycle_events": true}, nil)
 		if e != nil {
 			c.close()
 			fmt.Fprintln(os.Stderr, "AX:", e)
@@ -219,6 +220,7 @@ func (b *bridge) connectLoop() {
 				}
 			}
 		}()
+		b.bootstrap() // Discovery and native binding may both precede connection.
 	connection:
 		for {
 			select {
@@ -228,6 +230,10 @@ func (b *bridge) connectLoop() {
 				break connection
 			case <-healthy:
 				retryDelay = time.Second
+				b.bootstrap() // Compatibility fallback for brokers without lifecycle hints.
+			case <-b.discovered:
+				b.bootstrap()
+			case <-c.lifecycle:
 				b.bootstrap()
 			case m := <-c.offers:
 				b.deliver(c, m)
@@ -423,7 +429,7 @@ func runBridge(ctx context.Context, dir, file string, in io.Reader, out io.Write
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	b := &bridge{session: s, file: file, dir: dir, instance: randomID("ins_"), out: out, ctx: ctx}
+	b := &bridge{session: s, file: file, dir: dir, instance: randomID("ins_"), out: out, ctx: ctx, discovered: make(chan struct{}, 1)}
 	stopResources := watchResources(ctx, dir, func() {
 		// A stuck worker must not block the watchdog behind its mutex.
 		if !b.mu.TryLock() {
@@ -469,6 +475,10 @@ func runBridge(ctx context.Context, dir, file string, in io.Reader, out io.Write
 			b.mu.Lock()
 			b.toolsListed = e == nil
 			b.mu.Unlock()
+			select {
+			case b.discovered <- struct{}{}:
+			default:
+			}
 		case "tools/call":
 			var call struct {
 				Name string          `json:"name"`

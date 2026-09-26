@@ -112,7 +112,7 @@ func TestLauncherNameProbeCannotStallLaunch(t *testing.T) {
 	}
 }
 
-func startTestServer(t *testing.T) string {
+func startTestServer(t testing.TB) string {
 	t.Helper()
 	dir, err := os.MkdirTemp("/tmp", "ax-launch-")
 	if err != nil {

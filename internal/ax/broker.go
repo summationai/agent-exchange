@@ -40,19 +40,20 @@ type Agent struct {
 	BindingError string `json:"binding_error,omitempty"`
 }
 type Message struct {
-	ID        string       `json:"message_id"`
-	Sender    Agent        `json:"sender"`
-	Recipient string       `json:"recipient_id"`
-	Text      string       `json:"text"`
-	Parent    string       `json:"in_reply_to,omitempty"`
-	ResendOf  string       `json:"resend_of,omitempty"`
-	Thread    string       `json:"thread_id,omitempty"`
-	Seq       int64        `json:"recipient_seq"`
-	Created   int64        `json:"created_at_ms"`
-	Expires   int64        `json:"expires_at_ms"`
-	Depth     int          `json:"reply_depth"`
-	State     string       `json:"status"`
-	Receipt   *sendReceipt `json:"receipt,omitempty"`
+	ID            string           `json:"message_id"`
+	Sender        Agent            `json:"sender"`
+	Recipient     string           `json:"recipient_id"`
+	Text          string           `json:"text"`
+	Parent        string           `json:"in_reply_to,omitempty"`
+	ResendOf      string           `json:"resend_of,omitempty"`
+	Thread        string           `json:"thread_id,omitempty"`
+	Seq           int64            `json:"recipient_seq"`
+	Created       int64            `json:"created_at_ms"`
+	Expires       int64            `json:"expires_at_ms"`
+	Depth         int              `json:"reply_depth"`
+	State         string           `json:"status"`
+	Receipt       *sendReceipt     `json:"receipt,omitempty"`
+	QueuedContext *deliveryContext `json:"queued_context,omitempty"`
 }
 type peer struct {
 	Agent
@@ -67,9 +68,10 @@ type peer struct {
 }
 type serverConn struct {
 	net.Conn
-	writeMu sync.Mutex
-	agent   string
-	epoch   int64
+	writeMu         sync.Mutex
+	agent           string
+	epoch           int64
+	lifecycleEvents bool
 }
 
 func (c *serverConn) send(p packet) error {
@@ -360,21 +362,22 @@ func (b *broker) auth(c *serverConn) (*peer, error) {
 func (b *broker) request(c *serverConn, method string, params json.RawMessage) (any, error) {
 	var a struct {
 		Session
-		Version        string          `json:"version"`
-		Native         string          `json:"native_session_id"`
-		Permission     string          `json:"permission_mode"`
-		State          string          `json:"state"`
-		Policy         string          `json:"policy"`
-		Target         string          `json:"target"`
-		Text           string          `json:"text"`
-		ClientID       string          `json:"client_message_id"`
-		MessageID      string          `json:"message_id"`
-		AfterMessage   string          `json:"after_message_id"`
-		NotificationID string          `json:"notification_id"`
-		Receipt        string          `json:"receipt"`
-		TTL            json.RawMessage `json:"ttl_seconds"`
-		AfterSeq       json.RawMessage `json:"after_seq"`
-		Mesh           string          `json:"mesh"`
+		Version         string          `json:"version"`
+		Native          string          `json:"native_session_id"`
+		Permission      string          `json:"permission_mode"`
+		State           string          `json:"state"`
+		Policy          string          `json:"policy"`
+		Target          string          `json:"target"`
+		Text            string          `json:"text"`
+		ClientID        string          `json:"client_message_id"`
+		MessageID       string          `json:"message_id"`
+		AfterMessage    string          `json:"after_message_id"`
+		NotificationID  string          `json:"notification_id"`
+		Receipt         string          `json:"receipt"`
+		TTL             json.RawMessage `json:"ttl_seconds"`
+		AfterSeq        json.RawMessage `json:"after_seq"`
+		Mesh            string          `json:"mesh"`
+		LifecycleEvents bool            `json:"lifecycle_events"`
 	}
 	if e := json.Unmarshal(params, &a); e != nil {
 		return nil, errors.New("invalid parameters")
@@ -472,6 +475,7 @@ func (b *broker) request(c *serverConn, method string, params json.RawMessage) (
 		p.Online = true
 		c.agent = p.ID
 		c.epoch = p.epoch
+		c.lifecycleEvents = a.LifecycleEvents
 		return object{"agent_id": p.ID, "lease_epoch": p.epoch}, nil
 	}
 	if method == "ax.lifecycle" && c.agent == "" {
@@ -506,6 +510,12 @@ func (b *broker) request(c *serverConn, method string, params json.RawMessage) (
 		if err := b.save(p); err != nil {
 			p.Agent = before
 			return nil, err
+		}
+		if p.conn != nil && p.conn.lifecycleEvents && !p.ready {
+			// Optional hint for this bridge only. Old clients retain heartbeat setup.
+			if p.conn.send(packet{Method: "ax.lifecycle.changed"}) != nil {
+				p.conn.Close()
+			}
 		}
 		return object{"ok": true}, nil
 	}
@@ -656,6 +666,14 @@ func (b *broker) request(c *serverConn, method string, params json.RawMessage) (
 		}
 		// A fast recipient may fetch before the bridge records its host receipt.
 		// Never let that late receipt regress stronger evidence of delivery.
+		if (state == "wake_accepted" || state == "channel_written") && (m.State == "content_served" || m.State == "acknowledged") {
+			// Keep the timing evidence even when state has already advanced. At
+			// most one observation of each receipt is retained, including retries.
+			_, err := b.db.Exec(`INSERT INTO events(message,state,at,epoch)
+ SELECT ?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM events WHERE message=? AND state=?)`,
+				m.ID, state, time.Now().UnixMilli(), p.epoch, m.ID, state)
+			return object{"ok": true}, err
+		}
 		if m.State == "acknowledged" || m.State == "abandoned" || m.State == state || (m.State == "content_served" && state != "acknowledged") {
 			return object{"ok": true}, nil
 		}
@@ -731,7 +749,7 @@ func (b *broker) status(id string) (any, error) {
 		}
 		events = append(events, object{"event": s, "at_ms": at, "epoch": epoch})
 	}
-	return object{"message": m, "events": events, "delivery_evidence": deliveryEvidence(m.State), "acknowledged": m.State == "acknowledged", "task_completion": "unknown"}, rows.Err()
+	return object{"message": m, "events": events, "timing": messageTiming(m, events), "delivery_evidence": deliveryEvidence(m.State), "acknowledged": m.State == "acknowledged", "task_completion": "unknown"}, rows.Err()
 }
 func safe(p *peer) bool {
 	if p.Host == "pi" && p.Permission == "native" {
@@ -885,6 +903,7 @@ func (b *broker) send(p *peer, target, parent, text, key string, ttl int, method
 		thread = id
 	}
 	m := Message{ID: id, Thread: thread, Sender: p.Agent, Recipient: to.ID, Text: text, Parent: parent, ResendOf: resendOf, Seq: seq, Created: now.UnixMilli(), Expires: now.Add(time.Duration(ttl) * time.Second).UnixMilli(), Depth: depth, State: "queued"}
+	m.QueuedContext = &deliveryContext{BrokerVersion: Version, RecipientHost: to.Host, RecipientState: agentSnapshot(to).State, SenderState: agentSnapshot(p).State}
 	if _, e = tx.Exec("INSERT INTO messages VALUES(?,?,?,?,?,?,?,?,?,?)", m.ID, p.ID, to.ID, key, hash, seq, m.State, string(raw(m)), m.Created, m.Expires); e != nil {
 		return nil, e
 	}

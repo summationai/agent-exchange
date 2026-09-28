@@ -19,24 +19,25 @@ import (
 )
 
 type Session struct {
-	ID            string          `json:"agent_id"`
-	Secret        string          `json:"secret"`
-	Name          string          `json:"name"`
-	Host          string          `json:"host"`
-	Mesh          string          `json:"mesh"`
-	Workspace     string          `json:"workspace"`
-	Native        string          `json:"native_session_id"`
-	NativeFile    string          `json:"native_session_file,omitempty"`
-	ClaudePending string          `json:"claude_pending_transcript,omitempty"`
-	Started       bool            `json:"started"`
-	BindingError  string          `json:"binding_error,omitempty"`
-	AllowBypass   bool            `json:"allow_bypass"`
-	CodexRemote   string          `json:"codex_remote,omitempty"`
-	AdapterSocket string          `json:"adapter_socket,omitempty"`
-	Terminal      terminalContext `json:"terminal,omitempty"`
-	SpawnRoot     string          `json:"spawn_root,omitempty"`
-	SpawnDepth    int             `json:"spawn_depth,omitempty"`
-	SpawnToken    string          `json:"spawn_token,omitempty"`
+	ID               string          `json:"agent_id"`
+	Secret           string          `json:"secret"`
+	Name             string          `json:"name"`
+	Host             string          `json:"host"`
+	Mesh             string          `json:"mesh"`
+	Workspace        string          `json:"workspace"`
+	Native           string          `json:"native_session_id"`
+	NativeFile       string          `json:"native_session_file,omitempty"`
+	ClaudePending    string          `json:"claude_pending_transcript,omitempty"`
+	Started          bool            `json:"started"`
+	BindingError     string          `json:"binding_error,omitempty"`
+	AllowBypass      bool            `json:"allow_bypass"`
+	CodexRemote      string          `json:"codex_remote,omitempty"`
+	AdapterSocket    string          `json:"adapter_socket,omitempty"`
+	DeliveryBoundary string          `json:"delivery_boundary,omitempty"`
+	Terminal         terminalContext `json:"terminal,omitempty"`
+	SpawnRoot        string          `json:"spawn_root,omitempty"`
+	SpawnDepth       int             `json:"spawn_depth,omitempty"`
+	SpawnToken       string          `json:"spawn_token,omitempty"`
 }
 
 func randomID(prefix string) string {

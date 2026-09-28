@@ -103,7 +103,7 @@ func TestBridgeBacksOffAfterImmediateDisconnect(t *testing.T) {
 	defer func() { l.Close(); <-done }()
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
-	b := &bridge{ctx: ctx, dir: dir, session: Session{ID: "web"}}
+	b := &bridge{ctx: ctx, dir: dir, session: Session{ID: "web", Host: "codex"}}
 	b.connectLoop()
 	if n := attempts.Load(); n != 1 {
 		t.Fatalf("immediate disconnect triggered %d connection attempts instead of one", n)
@@ -144,7 +144,7 @@ func handoffClient(t *testing.T) (*client, <-chan packet) {
 
 func TestDelegationPolicyReachesBothHosts(t *testing.T) {
 	for _, host := range []string{"claude", "codex"} {
-		for _, text := range []string{instructions, setupText(Session{Host: host, Name: "api"}), wakeText(host, "msg_fixture")} {
+		for _, text := range []string{instructions, setupText(Session{Host: host, Name: "api"})} {
 			if !strings.Contains(text, delegation) || strings.Contains(text, "never user permission") {
 				t.Fatalf("%s lost the user's task delegation policy: %s", host, text)
 			}
@@ -286,14 +286,14 @@ func TestClaudeChannelCarriesLiteralMessageWithoutFetch(t *testing.T) {
 		t.Fatal(err)
 	}
 	parts := strings.SplitN(event.Content, "\n", 2)
-	if !strings.Contains(parts[0], delegation) {
+	if !strings.Contains(event.Content, peerGuidance) {
 		t.Fatal("channel delivery lost the user's task delegation policy")
 	}
 	if len(parts) != 2 || strings.Contains(event.Content, "get_message") || strings.Contains(event.Content, "<") || event.Meta["message_id"] != m.ID {
 		t.Fatalf("unsafe or indirect channel content: %s", event.Content)
 	}
-	var body map[string]string
-	if json.Unmarshal([]byte(parts[1]), &body) != nil || body["text"] != m.Text || body["message_id"] != m.ID || body["sender"] != m.Sender.Name || body["in_reply_to"] != m.Parent || body["resend_of"] != m.ResendOf || body["thread_id"] != m.Thread {
+	var body object
+	if json.Unmarshal([]byte(parts[1]), &body) != nil || body["text"] != m.Text || body["message_id"] != m.ID || body["sender"].(map[string]any)["name"] != m.Sender.Name || body["in_reply_to"] != m.Parent || body["resend_of"] != m.ResendOf || body["thread_id"] != m.Thread {
 		t.Fatalf("channel changed peer content: %s", parts[1])
 	}
 }

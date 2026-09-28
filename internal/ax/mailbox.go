@@ -40,6 +40,7 @@ type sendReceipt struct {
 // still holding that value has never reported itself alive.
 func agentSnapshot(p *peer) Agent {
 	a := p.Agent
+	a.Capabilities = p.capabilities
 	a.Online = p.conn != nil && time.Since(p.seen) <= 15*time.Second
 	if a.State == "exited" {
 		return a
@@ -88,6 +89,8 @@ func deliveryEvidence(state string) string {
 func queueReason(to, from *peer) string {
 	snapshot := agentSnapshot(to)
 	switch {
+	case snapshot.BindingError != "":
+		return snapshot.BindingError
 	case snapshot.State == "exited":
 		return "Recipient session has exited; mail waits for its next AX launch, subject to expiration."
 	case to.Policy != "accept":
@@ -97,7 +100,7 @@ func queueReason(to, from *peer) string {
 	case !snapshot.Online:
 		return "Recipient is offline; mail remains queued."
 	case snapshot.State == "inactive":
-		return "Recipient is running but has not activated AX messaging; mail remains queued until it calls an AX tool."
+		return "Recipient has not activated AX messaging; waiting for tool discovery and native binding. Mail remains queued."
 	case snapshot.State == "starting" || to.Native == "":
 		return "Recipient is starting; messaging is not ready."
 	case snapshot.State == "blocked":
@@ -108,6 +111,8 @@ func queueReason(to, from *peer) string {
 		return "Sender permission state is unavailable; delivery remains blocked."
 	case !safe(from):
 		return permissionBlockReason("Sender", from)
+	case boundaryWait(to):
+		return "Recipient's native adapter reports busy; waiting for its idle boundary."
 	default:
 		return "Awaiting the next permitted FIFO handoff; readiness is only a snapshot."
 	}

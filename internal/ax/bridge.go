@@ -168,11 +168,25 @@ func (b *bridge) connectLoop() {
 		b.mu.Lock()
 		s := b.session
 		b.mu.Unlock()
-		e = c.call("ax.connect", object{"version": "1", "agent_id": s.ID, "secret": s.Secret, "lifecycle_events": true}, nil)
+		caps, capErr := sessionCapabilities(s)
+		if capErr != nil {
+			c.close()
+			fmt.Fprintln(os.Stderr, "AX:", capErr)
+			return
+		}
+		var connected struct {
+			Capabilities *deliveryCapabilities `json:"delivery_capabilities"`
+		}
+		e = c.call("ax.connect", object{"version": "1", "agent_id": s.ID, "secret": s.Secret, "lifecycle_events": true, "delivery_capabilities": caps}, &connected)
 		if e != nil {
 			c.close()
 			fmt.Fprintln(os.Stderr, "AX:", e)
 			continue
+		}
+		if connected.Capabilities == nil && caps.Boundary == "idle" {
+			c.close()
+			fmt.Fprintln(os.Stderr, "AX: this broker cannot negotiate idle delivery; update the broker before connecting this session")
+			return
 		}
 		b.mu.Lock()
 		// A hook may have recorded a conflict while messaging was disconnected.
@@ -246,7 +260,7 @@ func (b *bridge) connectLoop() {
 }
 func wakeText(host, id string) string {
 	tool := toolName(host, "get_message")
-	return "AX peer message waiting. Call the MCP tool " + tool + " with message_id=" + id + ". " + delegation + " Use reply(message_id, text) if a response is needed; this also acknowledges receipt. Otherwise use ack_message(message_id)."
+	return "AX message " + id + ". Call " + tool + " with message_id=" + id + " to read the peer task and AX guidance."
 }
 
 // Native session confirmation and successful MCP tool discovery together prove
@@ -323,20 +337,23 @@ func (b *bridge) deliver(c *client, m Message) {
 	if s.Host == "claude" || s.Host == "pi" {
 		// The native channel identifies peer content separately from user input.
 		// JSON escaping keeps peer markup from closing that channel's wrapper.
-		body := object{"message_id": m.ID, "sender": m.Sender.Name, "harness": m.Sender.Host, "text": m.Text, "in_reply_to": m.Parent, "thread_id": m.Thread}
-		if m.ResendOf != "" {
-			body["resend_of"] = m.ResendOf
-		}
-		text = "AX peer message. " + delegation + " The complete message is below; no fetch needed. Reply through " + toolName(s.Host, "reply") + " if needed (this also acknowledges), otherwise call " + toolName(s.Host, "ack_message") + ".\n" + string(raw(body))
+		body := compactMessage(m, true)
+		text = "AX peer message; complete content, no fetch needed. Use " + toolName(s.Host, "reply") + " or " + toolName(s.Host, "ack_message") + ".\n" + string(raw(body))
 	}
-	if b.notify(s, text, object{"message_id": m.ID, "sender": m.Sender.Name, "harness": m.Sender.Host}) == nil {
+	err := b.notify(s, text, object{"message_id": m.ID, "sender": m.Sender.Name, "harness": m.Sender.Host})
+	var deferred *deliveryDeferred
+	if errors.As(err, &deferred) {
+		// The native adapter serialized its busy report before this receipt.
+		// Do not overwrite a newer native idle observation here.
+		receipt = "deferred_idle"
+	} else if err == nil {
 		if s.Host == "claude" || s.Host == "pi" {
 			receipt = "channel_written"
 		} else {
 			receipt = "wake_accepted"
 		}
 	}
-	if e := c.call("ax.receipt", object{"message_id": m.ID, "receipt": receipt}, nil); e != nil {
+	if e := c.call("ax.receipt", object{"message_id": m.ID, "receipt": receipt, "handoff_id": m.HandoffID}, nil); e != nil {
 		fmt.Fprintln(os.Stderr, "AX receipt:", e)
 	}
 }
@@ -531,13 +548,14 @@ func runBridge(ctx context.Context, dir, file string, in io.Reader, out io.Write
 				}
 				cancelCall()
 			}
-			if e == nil && (method == "ax.send" || method == "ax.reply" || method == "ax.resend" || method == "ax.follow_up") {
-				result = object{"message": result, "client_message_id": clean["client_message_id"], "next_action": "End your turn after sending. AX wakes you when a reply arrives. Do not poll status or sleep waiting for it."}
+			if e == nil {
+				key, _ := clean["client_message_id"].(string)
+				result = compactToolResult(method, result, key)
 			}
 			// A stray AX_HOME gives a session its own broker and its own agents. The
 			// list alone cannot show that, so name the runtime it was read from.
 			if e == nil && method == "ax.list" {
-				result = object{"agents": result, "ax_home": b.dir, "scope": "Agents are isolated per AX_HOME. This is every agent in this runtime and no others, so if an expected peer is missing, compare ax_home with the session you expected to find."}
+				result = object{"agents": result, "ax_home": b.dir, "scope": "Same-user, cross-repository routing in this AX_HOME. Missing peer? Compare AX_HOME; separate runtimes are isolated."}
 			}
 			body := string(raw(result))
 			response := object{"isError": e != nil}

@@ -117,6 +117,11 @@ func doctorBroker(ctx context.Context, dir string, out io.Writer) {
 	fmt.Fprintf(out, "Broker: reachable, %d registered agents\n", len(agents))
 	for _, a := range agents {
 		fmt.Fprintf(out, "  name=%q harness=%q online=%t state=%q agent=%q\n", a.Name, a.Host, a.Online, a.State, a.ID)
+		if c := a.Capabilities; c != nil {
+			fmt.Fprintf(out, "    delivery: contract=%d content=%s boundary=%s adapter=%s\n", c.Version, c.Content, c.Boundary, c.AdapterVersion)
+		} else {
+			fmt.Fprintln(out, "    delivery: legacy adapter; capabilities unavailable")
+		}
 		if a.BindingError != "" {
 			fmt.Fprintln(out, "  "+a.BindingError)
 		}

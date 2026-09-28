@@ -3,6 +3,7 @@ package ax
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -25,9 +26,52 @@ type inboxItem struct {
 	State     string `json:"status"`
 	Preview   string `json:"preview"`
 	Created   int64  `json:"created_at_ms"`
+	Thread    string `json:"thread_id"`
 }
 
-func (b *broker) inbox(target string) ([]inboxItem, error) {
+type InboxFilter struct{ Target, Thread, State string }
+
+func parseInboxFilter(args []string) (InboxFilter, error) {
+	var filter InboxFilter
+	flags := flag.NewFlagSet("inbox", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	flags.StringVar(&filter.Target, "a", "", "Agent name")
+	flags.StringVar(&filter.Thread, "t", "", "Thread ID")
+	flags.StringVar(&filter.State, "s", "", "Delivery state")
+	if err := flags.Parse(args); err != nil {
+		return filter, err
+	}
+	if flags.NArg() > 1 || (flags.NArg() == 1 && filter.Target != "") {
+		return filter, errors.New("usage: ax inbox [-a NAME] [-t THREAD_ID] [-s STATE] [NAME]")
+	}
+	if flags.NArg() == 1 {
+		filter.Target = flags.Arg(0)
+	}
+	return filter, filter.validate()
+}
+
+func (f InboxFilter) validate() error {
+	if f.Thread != "" && !validID.MatchString(f.Thread) {
+		return errors.New("invalid thread ID")
+	}
+	if f.State != "" {
+		switch f.State {
+		case "queued", "handoff_started", "wake_accepted", "channel_written", "content_served", "acknowledged", "delivery_uncertain", "expired", "refused", "abandoned":
+		default:
+			return errors.New("unknown delivery state")
+		}
+	}
+	return nil
+}
+
+func (b *broker) inbox(target string, filters ...InboxFilter) ([]inboxItem, error) {
+	var options InboxFilter
+	if len(filters) > 0 {
+		options = filters[0]
+	}
+	if err := options.validate(); err != nil {
+		return nil, err
+	}
 	filter := ""
 	if target != "" {
 		p, e := b.resolve(target)
@@ -37,10 +81,13 @@ func (b *broker) inbox(target string) ([]inboxItem, error) {
 		filter = p.ID
 	}
 	// Bound the result and frame size. Bodies are fetched individually.
-	rows, e := b.db.Query(`SELECT m.id,json_extract(s.data,'$.name'),json_extract(r.data,'$.name'),m.state,m.created,
- substr(json_extract(m.data,'$.text'),1,160) FROM messages m
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	rows, e := b.db.QueryContext(ctx, `SELECT m.id,json_extract(s.data,'$.name'),json_extract(r.data,'$.name'),m.state,m.created,
+ substr(json_extract(m.data,'$.text'),1,160),coalesce(json_extract(m.data,'$.thread_id'),'') FROM messages m
  JOIN agents s ON s.id=m.sender JOIN agents r ON r.id=m.recipient
- WHERE (?='' OR m.sender=? OR m.recipient=?) ORDER BY m.rowid DESC LIMIT 100`, filter, filter, filter)
+ WHERE (?='' OR m.sender=? OR m.recipient=?) AND (?='' OR json_extract(m.data,'$.thread_id')=?)
+ AND (?='' OR m.state=?) ORDER BY m.rowid DESC LIMIT 100`, filter, filter, filter, options.Thread, options.Thread, options.State, options.State)
 	if e != nil {
 		return nil, e
 	}
@@ -48,7 +95,7 @@ func (b *broker) inbox(target string) ([]inboxItem, error) {
 	items := []inboxItem{}
 	for rows.Next() {
 		var item inboxItem
-		if e = rows.Scan(&item.ID, &item.Sender, &item.Recipient, &item.State, &item.Created, &item.Preview); e != nil {
+		if e = rows.Scan(&item.ID, &item.Sender, &item.Recipient, &item.State, &item.Created, &item.Preview, &item.Thread); e != nil {
 			return nil, e
 		}
 		items = append(items, item)
@@ -61,6 +108,7 @@ type inboxView struct {
 	selected int
 	scroll   int
 	body     Message
+	detail   inboxDetail
 	problem  string
 }
 
@@ -107,7 +155,7 @@ func inboxText(s string) string {
 func (v *inboxView) render(width, height int, target string) string {
 	width = max(1, width-1) // Avoid wrapping at the terminal's right edge.
 	height = max(1, height)
-	lines := []string{"AX INBOX  ·  read only", "Latest 100 messages  ·  delivery status is not task completion"}
+	lines := []string{"AX INBOX  ·  read only", "Latest 100 matches · terminal mail retained up to 7 days · receipt is not task completion"}
 	if target != "" {
 		lines[0] += "  ·  " + target
 	}
@@ -127,7 +175,7 @@ func (v *inboxView) render(width, height int, target string) string {
 			item.State, strings.ReplaceAll(item.Preview, "\n", " ")))
 	}
 	if len(v.items) == 0 {
-		lines = append(lines, "No messages yet. Ask a named agent to message another.")
+		lines = append(lines, "No retained messages match. Older or expired history may have been removed.")
 	}
 	for len(lines) < 2+listHeight {
 		lines = append(lines, "")
@@ -139,6 +187,9 @@ func (v *inboxView) render(width, height int, target string) string {
 		body := "Loading message…"
 		if v.body.ID == item.ID {
 			body = v.body.Text
+		}
+		if v.detail.Message.ID == item.ID {
+			body = v.detail.text(time.Now())
 		}
 		wrapped := strings.Split(runewidth.Wrap(inboxText(body), width), "\n")
 		bodyHeight := max(1, height-len(lines)-2)
@@ -159,6 +210,10 @@ func (v *inboxView) render(width, height int, target string) string {
 // The observer owns only its own socket and terminal. It never starts or stops
 // the broker or a harness, including while reconnecting after a broker restart.
 func Inbox(ctx context.Context, dir, target string, in, out *os.File) error {
+	return InboxFiltered(ctx, dir, InboxFilter{Target: target}, in, out)
+}
+
+func InboxFiltered(ctx context.Context, dir string, filter InboxFilter, in, out *os.File) error {
 	if !term.IsTerminal(int(in.Fd())) || !term.IsTerminal(int(out.Fd())) {
 		return errors.New("ax inbox needs an interactive terminal; use ax agents or ax status MESSAGE_ID in scripts")
 	}
@@ -192,9 +247,10 @@ func Inbox(ctx context.Context, dir, target string, in, out *os.File) error {
 	// One worker, one request at a time, with a fixed backoff even on immediate
 	// errors. Keeping I/O off the render loop makes quit responsive during outages.
 	type update struct {
-		items []inboxItem
-		body  Message
-		err   error
+		items  []inboxItem
+		body   Message
+		err    error
+		detail inboxDetail
 	}
 	updates := make(chan update, 1)
 	selection := make(chan string, 1)
@@ -212,13 +268,14 @@ func Inbox(ctx context.Context, dir, target string, in, out *os.File) error {
 				c, u.err = dial(socketPath(dir))
 			}
 			if u.err == nil {
-				u.err = c.call("ax.inbox", object{"target": target}, &u.items)
+				u.err = c.callContext(ctx, "ax.inbox", object{"target": filter.Target, "thread_id": filter.Thread, "delivery_state": filter.State}, &u.items)
 			}
 			if u.err == nil {
 				for _, item := range u.items {
 					if item.ID == id {
 						// Local inspection does not mark mail read by its recipient.
-						u.err = c.call("ax.inbox_message", object{"message_id": id}, &u.body)
+						u.err = c.callContext(ctx, "ax.inspect_message", object{"message_id": id}, &u.detail)
+						u.body = u.detail.Message
 						break
 					}
 				}
@@ -269,7 +326,14 @@ func Inbox(ctx context.Context, dir, target string, in, out *os.File) error {
 		if e != nil {
 			return e
 		}
-		frame := view.render(width, height, target)
+		label := filter.Target
+		if filter.Thread != "" {
+			label += " thread=" + filter.Thread
+		}
+		if filter.State != "" {
+			label += " state=" + filter.State
+		}
+		frame := view.render(width, height, label)
 		if frame != previousFrame {
 			if _, e = io.WriteString(out, frame); e != nil {
 				return e
@@ -287,6 +351,7 @@ func Inbox(ctx context.Context, dir, target string, in, out *os.File) error {
 				view.problem = ""
 				view.selectItems(u.items)
 				view.body = u.body
+				view.detail = u.detail
 			}
 		case key, ok := <-keys:
 			if !ok || key == 'q' || key == 3 || key == 4 {

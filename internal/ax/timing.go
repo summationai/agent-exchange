@@ -11,7 +11,7 @@ type deliveryContext struct {
 
 func messageTiming(m Message, events []object) object {
 	stages := map[string]*int64{}
-	for _, name := range []string{"queued", "handoff_started", "wake_accepted", "channel_written", "content_served", "acknowledged", "recipient_turn_started"} {
+	for _, name := range []string{"queued", "handoff_started", "deferred_idle", "wake_accepted", "channel_written", "content_served", "acknowledged", "recipient_turn_started"} {
 		stages[name] = nil
 	}
 	for _, event := range events {

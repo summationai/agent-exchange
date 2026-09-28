@@ -106,6 +106,8 @@ Saved conversations, identities, and mail remain on disk. Launching the same AX 
 
 Queued, accepted by the host, fetched, and acknowledged are separate delivery states. Acknowledgment proves receipt, not completion of the delegated task.
 
+`ax status MESSAGE_ID` includes observed delivery-stage timings. See [readiness and latency measurement](latency.md) for missing-evidence semantics, bounded local samples, and the transport benchmark.
+
 Ask the original sending agent to resend an expired request by its message ID.
 The `resend_message` tool copies the full stored text and original recipient into
 a new delivery attempt, linked by `resend_of`. It preserves the old history and

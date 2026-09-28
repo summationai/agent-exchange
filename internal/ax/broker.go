@@ -27,51 +27,57 @@ var validName = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_-]{0,47}$`)
 var validID = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,80}$`)
 
 type Agent struct {
-	ID           string            `json:"agent_id"`
-	Name         string            `json:"name"`
-	Host         string            `json:"host"`
-	Mesh         string            `json:"mesh"`
-	Native       string            `json:"native_session_id,omitempty"`
-	Permission   string            `json:"permission_mode"`
-	State        string            `json:"state"`
-	Policy       string            `json:"policy"`
-	Online       bool              `json:"online"`
-	AllowBypass  bool              `json:"allow_bypass"`
-	BindingError string            `json:"binding_error,omitempty"`
-	DeliveryMode string            `json:"delivery_mode,omitempty"`
-	Capabilities agentCapabilities `json:"capabilities"`
+	ID           string                `json:"agent_id"`
+	Name         string                `json:"name"`
+	Host         string                `json:"host"`
+	Mesh         string                `json:"mesh"`
+	Native       string                `json:"native_session_id,omitempty"`
+	Permission   string                `json:"permission_mode"`
+	State        string                `json:"state"`
+	Policy       string                `json:"policy"`
+	Online       bool                  `json:"online"`
+	AllowBypass  bool                  `json:"allow_bypass"`
+	BindingError string                `json:"binding_error,omitempty"`
+	Capabilities *deliveryCapabilities `json:"delivery_capabilities,omitempty"`
+	DeliveryMode string                `json:"delivery_mode,omitempty"`
+	Connectivity agentCapabilities     `json:"capabilities"`
 }
 type Message struct {
-	ID        string       `json:"message_id"`
-	Sender    Agent        `json:"sender"`
-	Recipient string       `json:"recipient_id"`
-	Text      string       `json:"text"`
-	Parent    string       `json:"in_reply_to,omitempty"`
-	ResendOf  string       `json:"resend_of,omitempty"`
-	Thread    string       `json:"thread_id,omitempty"`
-	Seq       int64        `json:"recipient_seq"`
-	Created   int64        `json:"created_at_ms"`
-	Expires   int64        `json:"expires_at_ms"`
-	Depth     int          `json:"reply_depth"`
-	State     string       `json:"status"`
-	Receipt   *sendReceipt `json:"receipt,omitempty"`
+	HandoffID     string           `json:"handoff_id,omitempty"` // Offer-only, never stored in the mailbox.
+	ID            string           `json:"message_id"`
+	Sender        Agent            `json:"sender"`
+	Recipient     string           `json:"recipient_id"`
+	Text          string           `json:"text"`
+	Parent        string           `json:"in_reply_to,omitempty"`
+	ResendOf      string           `json:"resend_of,omitempty"`
+	Thread        string           `json:"thread_id,omitempty"`
+	Seq           int64            `json:"recipient_seq"`
+	Created       int64            `json:"created_at_ms"`
+	Expires       int64            `json:"expires_at_ms"`
+	Depth         int              `json:"reply_depth"`
+	State         string           `json:"status"`
+	Receipt       *sendReceipt     `json:"receipt,omitempty"`
+	QueuedContext *deliveryContext `json:"queued_context,omitempty"`
 }
 type peer struct {
+	handoffID, handoffMessage string
 	Agent
-	hash        string
-	epoch       int64
-	seen        time.Time
-	conn        *serverConn
-	ready       bool
-	enrolled    time.Time
-	notice      string
-	noticeRetry time.Time
+	hash         string
+	epoch        int64
+	seen         time.Time
+	conn         *serverConn
+	ready        bool
+	enrolled     time.Time
+	notice       string
+	noticeRetry  time.Time
+	capabilities *deliveryCapabilities
 }
 type serverConn struct {
 	net.Conn
-	writeMu sync.Mutex
-	agent   string
-	epoch   int64
+	writeMu         sync.Mutex
+	agent           string
+	epoch           int64
+	lifecycleEvents bool
 }
 
 func (c *serverConn) send(p packet) error {
@@ -296,6 +302,10 @@ func Serve(ctx context.Context, dir string) error {
 				reply := packet{ID: p.ID}
 				if e != nil {
 					reply.Error = &rpcError{Code: -32000, Message: e.Error()}
+					var rpc *rpcError
+					if errors.As(e, &rpc) {
+						reply.Error = rpc
+					}
 				} else {
 					reply.Result = raw(result)
 				}
@@ -322,7 +332,11 @@ func (b *broker) event(id, state string, epoch int64) error {
 		return e
 	}
 	defer tx.Rollback()
-	if _, e = tx.Exec("UPDATE messages SET state=? WHERE id=?", state, id); e != nil {
+	storedState := state
+	if state == "deferred_idle" {
+		storedState = "queued"
+	}
+	if _, e = tx.Exec("UPDATE messages SET state=? WHERE id=?", storedState, id); e != nil {
 		return e
 	}
 	at := time.Now().UnixMilli()
@@ -358,21 +372,26 @@ func (b *broker) auth(c *serverConn) (*peer, error) {
 func (b *broker) request(c *serverConn, method string, params json.RawMessage) (any, error) {
 	var a struct {
 		Session
-		Version        string          `json:"version"`
-		Native         string          `json:"native_session_id"`
-		Permission     string          `json:"permission_mode"`
-		State          string          `json:"state"`
-		Policy         string          `json:"policy"`
-		Target         string          `json:"target"`
-		Text           string          `json:"text"`
-		ClientID       string          `json:"client_message_id"`
-		MessageID      string          `json:"message_id"`
-		AfterMessage   string          `json:"after_message_id"`
-		NotificationID string          `json:"notification_id"`
-		Receipt        string          `json:"receipt"`
-		TTL            json.RawMessage `json:"ttl_seconds"`
-		AfterSeq       json.RawMessage `json:"after_seq"`
-		Mesh           string          `json:"mesh"`
+		HandoffID       string                `json:"handoff_id"`
+		ThreadFilter    string                `json:"thread_id"`
+		StateFilter     string                `json:"delivery_state"`
+		Version         string                `json:"version"`
+		Native          string                `json:"native_session_id"`
+		Permission      string                `json:"permission_mode"`
+		State           string                `json:"state"`
+		Policy          string                `json:"policy"`
+		Target          string                `json:"target"`
+		Text            string                `json:"text"`
+		ClientID        string                `json:"client_message_id"`
+		MessageID       string                `json:"message_id"`
+		AfterMessage    string                `json:"after_message_id"`
+		NotificationID  string                `json:"notification_id"`
+		Receipt         string                `json:"receipt"`
+		TTL             json.RawMessage       `json:"ttl_seconds"`
+		AfterSeq        json.RawMessage       `json:"after_seq"`
+		Mesh            string                `json:"mesh"`
+		LifecycleEvents bool                  `json:"lifecycle_events"`
+		Capabilities    *deliveryCapabilities `json:"delivery_capabilities"`
 	}
 	if e := json.Unmarshal(params, &a); e != nil {
 		return nil, errors.New("invalid parameters")
@@ -447,6 +466,9 @@ func (b *broker) request(c *serverConn, method string, params json.RawMessage) (
 		if c.agent != "" {
 			return nil, errors.New("connection already registered")
 		}
+		if err := validateCapabilities(p.Host, a.Capabilities); err != nil {
+			return nil, err
+		}
 		// Duplicate MCP processes must not fence and reconnect each other forever.
 		// Preserve the live owner; a disconnected or expired lease can be replaced.
 		if p.conn != nil && time.Since(p.seen) <= 15*time.Second {
@@ -474,7 +496,10 @@ func (b *broker) request(c *serverConn, method string, params json.RawMessage) (
 		p.Online = true
 		c.agent = p.ID
 		c.epoch = p.epoch
-		return object{"agent_id": p.ID, "lease_epoch": p.epoch}, nil
+		c.lifecycleEvents = a.LifecycleEvents
+		p.capabilities = a.Capabilities
+		p.handoffID, p.handoffMessage = "", ""
+		return object{"agent_id": p.ID, "lease_epoch": p.epoch, "delivery_capabilities": p.capabilities}, nil
 	}
 	if method == "ax.lifecycle" && c.agent == "" {
 		p := b.peers[a.ID]
@@ -509,11 +534,17 @@ func (b *broker) request(c *serverConn, method string, params json.RawMessage) (
 			p.Agent = before
 			return nil, err
 		}
+		if p.conn != nil && p.conn.lifecycleEvents && !p.ready {
+			// Optional hint for this bridge only. Old clients retain heartbeat setup.
+			if p.conn.send(packet{Method: "ax.lifecycle.changed"}) != nil {
+				p.conn.Close()
+			}
+		}
 		return object{"ok": true}, nil
 	}
 	// Local administration is available only on unbound connections, never via MCP.
 	if c.agent == "" && method == "ax.inbox" {
-		return b.inbox(a.Target)
+		return b.inbox(a.Target, InboxFilter{Thread: a.ThreadFilter, State: a.StateFilter})
 	}
 	if c.agent == "" && method == "ax.inbox_message" {
 		return b.message(a.MessageID)
@@ -558,6 +589,12 @@ func (b *broker) request(c *serverConn, method string, params json.RawMessage) (
 		return nil, e
 	}
 	switch method {
+	case "ax.capabilities":
+		if err := validateCapabilities(p.Host, a.Capabilities); err != nil {
+			return nil, err
+		}
+		p.capabilities = a.Capabilities
+		return object{"delivery_capabilities": p.capabilities}, nil
 	case "ax.notifications":
 		return b.notices(p.ID)
 	case "ax.ack_notification":
@@ -640,6 +677,21 @@ func (b *broker) request(c *serverConn, method string, params json.RawMessage) (
 		if m.Recipient != p.ID {
 			return nil, errors.New("message is addressed to another endpoint")
 		}
+		if method == "ax.receipt" && a.Receipt == "deferred_idle" {
+			if p.capabilities == nil || p.capabilities.Boundary != "idle" || a.HandoffID == "" ||
+				a.HandoffID != p.handoffID || m.ID != p.handoffMessage {
+				return nil, errors.New("idle deferral requires the current unaccepted handoff")
+			}
+			// Native idle may already have followed the busy preflight. Preserve
+			// that newer state so normal dispatch can retry this definite non-send.
+			if m.State == "queued" {
+				return object{"ok": true}, nil
+			} // Duplicate of this attempt's deferral.
+			if m.State != "handoff_started" {
+				return nil, errors.New("cannot defer an accepted or uncertain handoff")
+			}
+			return object{"ok": true}, b.event(m.ID, "deferred_idle", p.epoch)
+		}
 		if m.State == "queued" || m.State == "expired" || m.State == "refused" || m.State == "abandoned" {
 			return nil, errors.New("message has not been offered")
 		}
@@ -660,6 +712,14 @@ func (b *broker) request(c *serverConn, method string, params json.RawMessage) (
 		}
 		// A fast recipient may fetch before the bridge records its host receipt.
 		// Never let that late receipt regress stronger evidence of delivery.
+		if (state == "wake_accepted" || state == "channel_written") && (m.State == "content_served" || m.State == "acknowledged") {
+			// Keep the timing evidence even when state has already advanced. At
+			// most one observation of each receipt is retained, including retries.
+			_, err := b.db.Exec(`INSERT INTO events(message,state,at,epoch)
+ SELECT ?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM events WHERE message=? AND state=?)`,
+				m.ID, state, time.Now().UnixMilli(), p.epoch, m.ID, state)
+			return object{"ok": true}, err
+		}
 		if m.State == "acknowledged" || m.State == "abandoned" || m.State == state || (m.State == "content_served" && state != "acknowledged") {
 			return object{"ok": true}, nil
 		}
@@ -735,7 +795,15 @@ func (b *broker) status(id string) (any, error) {
 		}
 		events = append(events, object{"event": s, "at_ms": at, "epoch": epoch})
 	}
-	return object{"message": m, "events": events, "delivery_evidence": deliveryEvidence(m.State), "acknowledged": m.State == "acknowledged", "task_completion": "unknown"}, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close() // Release the single DB connection before reading current state.
+	snapshot, err := b.deliverySnapshot(m)
+	if err != nil {
+		return nil, err
+	}
+	return object{"message": m, "events": events, "timing": messageTiming(m, events), "current_snapshot": snapshot, "delivery_evidence": deliveryEvidence(m.State), "acknowledged": m.State == "acknowledged", "task_completion": "unknown"}, nil
 }
 func safe(p *peer) bool {
 	if p.Host == "pi" && p.Permission == "native" {
@@ -832,7 +900,15 @@ func (b *broker) send(p *peer, target, parent, text, key string, ttl int, method
 		}
 		depth = m.Depth + 1
 		if depth > 8 {
-			return nil, errors.New("reply depth limit reached; wait for user guidance")
+			recovery := fmt.Sprintf("If the user has authorized continuing in a fresh thread, including a standing instruction, call send_message with target=%q. Send the pending handoff with a concise summary and previous message ID %s, using context already available. Do not ask again or reread files merely to switch threads. This does not authorize replaying completed work or continuing acknowledgment loops.", to.ID, parent)
+			if reply {
+				recovery += " After the new send succeeds, call ack_message for the previous message, then end your turn."
+			} else {
+				recovery += " End your turn after sending; do not acknowledge your own outgoing message."
+			}
+			return nil, &rpcError{Code: replyDepthLimitCode, Message: "Reply depth limit reached; this message was not sent. " + recovery, Data: object{
+				"target": to.ID, "previous_message_id": parent, "thread_id": thread, "recovery": recovery,
+			}}
 		}
 	} else {
 		to, e = b.resolve(target)
@@ -881,6 +957,7 @@ func (b *broker) send(p *peer, target, parent, text, key string, ttl int, method
 		thread = id
 	}
 	m := Message{ID: id, Thread: thread, Sender: p.Agent, Recipient: to.ID, Text: text, Parent: parent, ResendOf: resendOf, Seq: seq, Created: now.UnixMilli(), Expires: now.Add(time.Duration(ttl) * time.Second).UnixMilli(), Depth: depth, State: "queued"}
+	m.QueuedContext = &deliveryContext{BrokerVersion: Version, RecipientHost: to.Host, RecipientState: agentSnapshot(to).State, SenderState: agentSnapshot(p).State}
 	if _, e = tx.Exec("INSERT INTO messages VALUES(?,?,?,?,?,?,?,?,?,?)", m.ID, p.ID, to.ID, key, hash, seq, m.State, string(raw(m)), m.Created, m.Expires); e != nil {
 		return nil, e
 	}
@@ -939,7 +1016,7 @@ func (b *broker) dispatch() {
 				}
 				continue
 			}
-			if p.DeliveryMode == "manual" || p.conn == nil || !p.ready || p.State == "starting" || p.State == "blocked" || p.Native == "" || p.Policy != "accept" || !safe(p) {
+			if p.DeliveryMode == "manual" || p.conn == nil || !p.ready || p.State == "starting" || p.State == "blocked" || p.Native == "" || p.Policy != "accept" || !safe(p) || boundaryWait(p) {
 				break
 			}
 			m, e := b.message(id)
@@ -954,6 +1031,8 @@ func (b *broker) dispatch() {
 				break
 			}
 			m.State = "handoff_started"
+			m.HandoffID = randomID("handoff_")
+			p.handoffID, p.handoffMessage = m.HandoffID, m.ID
 			if p.conn.send(packet{Method: "ax.delivery.offer", Params: raw(m)}) != nil {
 				b.event(id, "delivery_uncertain", p.epoch)
 				p.conn.Close()

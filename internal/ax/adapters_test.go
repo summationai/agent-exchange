@@ -7,12 +7,51 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestAdapterSeparatesDeferralFromUnknownOutcome(t *testing.T) {
+	dir := startTestServer(t)
+	s := Session{Host: "opencode", Native: "ses_fixture", Started: true}
+	file := filepath.Join(dir, "adapter-session.json")
+	if err := saveSession(file, s); err != nil {
+		t.Fatal(err)
+	}
+	for _, cause := range []error{&deliveryDeferred{State: "busy"}, errors.New("response lost"), nil} {
+		path, stop, err := startAdapterHost(context.Background(), dir, file, nil, func(context.Context, string, string) error { return cause })
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.AdapterSocket = path
+		err = notifyAdapter(context.Background(), s, "fixed wake")
+		stop()
+		var deferred *deliveryDeferred
+		if _, want := cause.(*deliveryDeferred); errors.As(err, &deferred) != want {
+			t.Fatal("wrong certainty", err)
+		}
+		if cause == nil && err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestOpenCodeDefersBeforeNativePrompt(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is unavailable")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, node, "testdata/opencode_host.mjs", "opencode.js").CombinedOutput()
+	if err != nil {
+		t.Fatalf("native plugin fixture: %v\n%s", err, output)
+	}
+}
 
 func TestNativeAdapterDiscoveryConnectsResumedSession(t *testing.T) {
 	for _, host := range []string{"grok", "opencode"} {

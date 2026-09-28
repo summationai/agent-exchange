@@ -89,5 +89,17 @@ func toolFailure(err error, args object) object {
 		}
 		failure["recovery"] = "If retrying this operation after recovery, reuse this client_message_id with unchanged arguments. Do not generate a new key."
 	}
+	var rpc *rpcError
+	if errors.As(err, &rpc) && rpc.Code == replyDepthLimitCode {
+		// This rejection occurs before any write, unlike a generic broker error
+		// which may report a failed commit with an uncertain outcome.
+		failure["code"] = "reply_depth_limit"
+		failure["submission"] = "not_submitted"
+		for _, key := range []string{"target", "previous_message_id", "thread_id", "recovery"} {
+			if value, ok := rpc.Data[key]; ok {
+				failure[key] = value
+			}
+		}
+	}
 	return failure
 }

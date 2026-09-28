@@ -20,7 +20,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const Version = "0.7.1"
+var Version = "0.7.1" // Development builds may set this with the Go linker.
 
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'" }
 
@@ -168,6 +168,10 @@ func launch(ctx context.Context, dir, host string, args []string, spawnToken str
 	s.Workspace, s.Mesh = cwd, mesh
 	s.Started = false // This launch must receive its own native SessionStart.
 	s.BindingError = ""
+	s.DeliveryBoundary = os.Getenv("AX_DELIVERY_BOUNDARY")
+	if _, e = sessionCapabilities(s); e != nil {
+		return e
+	}
 	if s.ClaudePending != "" && !missingClaudeTranscript(s.ClaudePending) {
 		s.ClaudePending = ""
 	}
@@ -474,7 +478,7 @@ Ask either agent to message another by name.
   ax agents                     List local agents
   ax attach -n NAME -s SESSION   Join an existing runtime over MCP stdio
   ax verify NAME                Verify a request and reply with an agent
-  ax inbox [NAME]               Watch messages in a separate terminal
+  ax inbox [-a NAME] [-t THREAD_ID] [-s STATE]  Inspect local delivery timelines
   ax spawn codex --name worker   Open a named peer in a new terminal pane
   ax spawn-status NAME          Inspect a previous pane launch
   ax status MESSAGE_ID          Inspect delivery receipts
@@ -587,14 +591,11 @@ Ask either agent to message another by name.
 		}
 		stopResources := watchResources(ctx, dir, cancel, nil)
 		defer stopResources()
-		if len(args) > 2 {
-			return errors.New("usage: ax inbox [NAME]")
+		filter, err := parseInboxFilter(args[1:])
+		if err != nil {
+			return err
 		}
-		target := ""
-		if len(args) == 2 {
-			target = args[1]
-		}
-		return Inbox(ctx, dir, target, os.Stdin, os.Stdout)
+		return InboxFiltered(ctx, dir, filter, os.Stdin, os.Stdout)
 	case "doctor":
 		doctor(ctx, dir, os.Stdout)
 		return nil
@@ -619,7 +620,10 @@ Ask either agent to message another by name.
 				fmt.Println("No AX agents yet. Launch a named session with ax HARNESS --name NAME.")
 			}
 			for _, a := range agents {
-				fmt.Printf("%-18s %-8s %-10s policy=%s tools=%t wake=%s\n", a.Name, a.Host, a.State, a.Policy, a.Capabilities.Tools, a.Capabilities.Wake)
+				fmt.Printf("%-18s %-8s %-10s policy=%s tools=%t wake=%s\n", a.Name, a.Host, a.State, a.Policy, a.Connectivity.Tools, a.Connectivity.Wake)
+				if a.Capabilities != nil {
+					fmt.Printf("  delivery: %s at %s (adapter %s)\n", a.Capabilities.Content, a.Capabilities.Boundary, a.Capabilities.AdapterVersion)
+				}
 				if a.BindingError != "" {
 					fmt.Println("  " + a.BindingError)
 				}

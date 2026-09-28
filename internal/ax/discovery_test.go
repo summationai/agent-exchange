@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-func connectDiscoveryPeer(t *testing.T, dir string, s Session) *client {
+func connectDiscoveryPeer(t testing.TB, dir string, s Session) *client {
 	t.Helper()
 	c, err := dial(socketPath(dir))
 	if err != nil {

@@ -86,6 +86,14 @@ type adapterWake struct {
 	done   chan error
 }
 
+// The native adapter proved that it did not submit the wake. This is the only
+// error safe to defer; timeouts and ambiguous native responses never replay.
+type deliveryDeferred struct{ State string }
+
+func (e *deliveryDeferred) Error() string {
+	return "native session became " + e.State + " before handoff"
+}
+
 type adapterHost struct {
 	mu      sync.Mutex
 	pending map[string]*adapterWake
@@ -166,6 +174,12 @@ func adapterServer(ctx context.Context, dir, file string, failures chan<- error,
 			}
 		}
 		if err != nil {
+			var deferred *deliveryDeferred
+			if errors.As(err, &deferred) {
+				w.WriteHeader(http.StatusConflict)
+				json.NewEncoder(w).Encode(object{"deferred_state": deferred.State})
+				return
+			}
 			http.Error(w, err.Error(), http.StatusServiceUnavailable)
 			return
 		}
@@ -183,7 +197,10 @@ func adapterServer(ctx context.Context, dir, file string, failures chan<- error,
 		}
 	})
 	mux.HandleFunc("/receipt", func(w http.ResponseWriter, r *http.Request) {
-		var input struct{ ID, Error string }
+		var input struct {
+			ID, Error     string
+			DeferredState string `json:"deferred_state"`
+		}
 		if json.NewDecoder(io.LimitReader(r.Body, maxFrame)).Decode(&input) != nil {
 			http.Error(w, "invalid receipt", 400)
 			return
@@ -195,6 +212,9 @@ func adapterServer(ctx context.Context, dir, file string, failures chan<- error,
 			var err error
 			if input.Error != "" {
 				err = errors.New(input.Error)
+			}
+			if input.DeferredState == "busy" || input.DeferredState == "blocked" {
+				err = &deliveryDeferred{State: input.DeferredState}
 			}
 			select {
 			case pending.done <- err:
@@ -221,6 +241,14 @@ func notifyAdapter(ctx context.Context, s Session, text string) error {
 		return err
 	}
 	defer res.Body.Close()
+	if res.StatusCode == http.StatusConflict {
+		var result struct {
+			State string `json:"deferred_state"`
+		}
+		if json.NewDecoder(io.LimitReader(res.Body, 1024)).Decode(&result) == nil && (result.State == "busy" || result.State == "blocked") {
+			return &deliveryDeferred{State: result.State}
+		}
+	}
 	if res.StatusCode != http.StatusNoContent {
 		return fmt.Errorf("native wake was not confirmed: %s", res.Status)
 	}

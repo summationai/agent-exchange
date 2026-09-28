@@ -61,7 +61,7 @@ func verifyAgent(ctx context.Context, dir, target string, out io.Writer) error {
 	if recipient.ID == "" || recipient.ID == s.ID {
 		return errors.New("choose another connected agent from ax agents")
 	}
-	if recipient.Capabilities.Wake == "user_turn" {
+	if recipient.Connectivity.Wake == "user_turn" {
 		fmt.Fprintln(out, "This endpoint needs a user turn. Ask it to call check_inbox once while verification is running.")
 	}
 	token := randomID("AX_VERIFY_")
@@ -92,7 +92,7 @@ func verifyAgent(ctx context.Context, dir, target string, out io.Writer) error {
 			if reply.Sender.ID != recipient.ID || reply.Parent != sent.ID || reply.Text != token {
 				continue
 			}
-			fmt.Fprintf(out, "Verified %s: request delivered, matching reply received and acknowledged in %s. Wake mode: %s.\n", target, time.Since(started).Round(time.Millisecond), recipient.Capabilities.Wake)
+			fmt.Fprintf(out, "Verified %s: request delivered, matching reply received and acknowledged in %s. Wake mode: %s.\n", target, time.Since(started).Round(time.Millisecond), recipient.Connectivity.Wake)
 			return nil
 		}
 	}

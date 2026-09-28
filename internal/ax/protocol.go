@@ -28,7 +28,10 @@ type packet struct {
 type rpcError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
+	Data    object `json:"data,omitempty"`
 }
+
+const replyDepthLimitCode = -32001
 
 func (e *rpcError) Error() string { return e.Message }
 func raw(v any) json.RawMessage   { b, _ := json.Marshal(v); return b }
@@ -81,15 +84,16 @@ func writeFrame(w io.Writer, p packet) error {
 }
 
 type client struct {
-	conn    net.Conn
-	mu      sync.Mutex
-	writing chan struct{}
-	closed  sync.Once
-	next    int
-	pending map[string]chan packet
-	offers  chan Message
-	notices chan deliveryNotice
-	done    chan struct{}
+	conn      net.Conn
+	mu        sync.Mutex
+	writing   chan struct{}
+	closed    sync.Once
+	next      int
+	pending   map[string]chan packet
+	offers    chan Message
+	notices   chan deliveryNotice
+	lifecycle chan struct{}
+	done      chan struct{}
 }
 
 func dial(path string) (*client, error) {
@@ -101,7 +105,7 @@ func dial(path string) (*client, error) {
 }
 
 func newClient(conn net.Conn) *client {
-	c := &client{conn: conn, writing: make(chan struct{}, 1), pending: map[string]chan packet{}, offers: make(chan Message, 8), notices: make(chan deliveryNotice, 1), done: make(chan struct{})}
+	c := &client{conn: conn, writing: make(chan struct{}, 1), pending: map[string]chan packet{}, offers: make(chan Message, 8), notices: make(chan deliveryNotice, 1), lifecycle: make(chan struct{}, 1), done: make(chan struct{})}
 	go func() {
 		defer c.close()
 		for {
@@ -109,7 +113,13 @@ func newClient(conn net.Conn) *client {
 			if e != nil {
 				return
 			}
-			if p.Method == "ax.delivery.notice" {
+			if p.Method == "ax.lifecycle.changed" {
+				// State is read from the trusted session file; duplicate hints coalesce.
+				select {
+				case c.lifecycle <- struct{}{}:
+				default:
+				}
+			} else if p.Method == "ax.delivery.notice" {
 				var n deliveryNotice
 				if json.Unmarshal(p.Params, &n) != nil {
 					return

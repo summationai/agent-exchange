@@ -91,8 +91,11 @@ func TestAttachedManualRuntimeAndNativePeerRoundTrip(t *testing.T) {
 	if err := m.call(t, "list_agents", object{}, &discovered); err != "" {
 		t.Fatal(err)
 	}
-	if len(discovered.Agents) != 1 || discovered.Agents[0].State != "user-turn" || !discovered.Agents[0].Capabilities.Tools || discovered.Agents[0].Capabilities.Wake != "user_turn" {
+	if len(discovered.Agents) != 1 || discovered.Agents[0].State != "user-turn" || !discovered.Agents[0].Connectivity.Tools || discovered.Agents[0].Connectivity.Wake != "user_turn" {
 		t.Fatalf("false readiness: %+v", discovered)
+	}
+	if discovered.Agents[0].DeliveryMode != "manual" || discovered.Agents[0].Capabilities != nil {
+		t.Fatalf("attachment claimed a native delivery contract: %+v", discovered)
 	}
 	s := Session{ID: randomID("agt_"), Secret: randomID(""), Name: "native", Host: "codex", Mesh: testMesh, Native: uuid()}
 	native := connectDiscoveryPeer(t, dir, s)
@@ -108,7 +111,10 @@ func TestAttachedManualRuntimeAndNativePeerRoundTrip(t *testing.T) {
 		t.Fatalf("listing offered manual mail: %+v", pending)
 	}
 	var fetched struct {
-		Message *Message `json:"message"`
+		Message *struct {
+			Message
+			Guidance string `json:"guidance"`
+		} `json:"message"`
 	}
 	if err := m.call(t, "check_inbox", object{}, &fetched); err != "" {
 		t.Fatal(err)
@@ -116,8 +122,15 @@ func TestAttachedManualRuntimeAndNativePeerRoundTrip(t *testing.T) {
 	if fetched.Message == nil || fetched.Message.ID != sent.ID || fetched.Message.State != "content_served" {
 		t.Fatalf("missing manual receive: %+v", fetched)
 	}
-	if err := m.call(t, "reply", object{"message_id": sent.ID, "text": "reviewed"}, nil); err != "" {
+	if fetched.Message.Text != "please review" || fetched.Message.Guidance != peerGuidance || fetched.Message.Thread != sent.Thread {
+		t.Fatalf("manual content lost body, thread, or guidance: %+v", fetched.Message)
+	}
+	var replied object
+	if err := m.call(t, "reply", object{"message_id": sent.ID, "text": "reviewed"}, &replied); err != "" {
 		t.Fatal(err)
+	}
+	if !strings.Contains(replied["next_action"].(string), "no automatic wake") || replied["submission"] != "submitted" || strings.Contains(string(raw(replied)), "reviewed") {
+		t.Fatalf("misleading manual send receipt: %+v", replied)
 	}
 	select {
 	case reply := <-native.offers:

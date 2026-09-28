@@ -16,6 +16,21 @@ export default {
       return response.status === 204 ? undefined : response.json();
     };
     let selected, creating = false, checking = false, previous;
+    let binding = Promise.resolve();
+    const bindState = (native, state, permission) => {
+      // Serialize the timer and wake preflight so a late busy report cannot
+      // overwrite a newer idle observation. At most one check and wake wait.
+      const result = binding.then(() => request("/bind", {native, state, permission}));
+      binding = result.catch(() => {});
+      return result;
+    };
+    const nativeState = (native) => {
+      if (api.state.session.permission(native).length || api.state.session.question(native).length) return "blocked";
+      // The ready native store may omit idle entries. Retry (and any new active
+      // status) is not idle and must not accept a competing prompt.
+      const type = api.state.session.status(native)?.type;
+      return type && type !== "idle" ? "busy" : "ready";
+    };
     const report = (error) => api.ui.toast({title: "AX", message: String(error), variant: "error", duration: 10000});
     const check = async () => {
       if (checking || !api.state.ready || abort.signal.aborted) return;
@@ -33,13 +48,12 @@ export default {
         const native = route.params.sessionID;
         const session = api.state.session.get(native);
         if (!session || session.parentID) return;
-        const state = api.state.session.permission(native).length || api.state.session.question(native).length
-          ? "blocked" : api.state.session.status(native)?.type === "busy" ? "busy" : "ready";
+        const state = nativeState(native);
         const permission = options.auto ? "auto" : api.state.config.permission === "allow" || api.state.config.permission?.["*"] === "allow" ? "bypassPermissions" : "default";
         const key = `${native}:${state}:${permission}`;
         if (key === previous) return;
         selected = native;
-        await request("/bind", {native, state, permission});
+        await bindState(native, state, permission);
         previous = key;
       } finally { checking = false; }
     };
@@ -52,6 +66,15 @@ export default {
         let error;
         try {
           if (wake.native !== selected) throw new Error("AX wake belongs to another conversation");
+          const deferredState = nativeState(selected);
+          if (deferredState !== "ready") {
+            // No prompt API was called. Keep the message queued until an
+            // observed idle transition; a failed prompt is never auto-replayed.
+            await bindState(selected, deferredState);
+            previous = undefined;
+            await request("/receipt", {id: wake.id, deferred_state: deferredState});
+            continue;
+          }
           const messages = api.state.session.messages(selected);
           const last = [...messages].reverse().find((message) => message.role === "user");
           const model = last?.model || (options.model ? {providerID: options.model.split("/")[0], modelID: options.model.split("/").slice(1).join("/")} : undefined);

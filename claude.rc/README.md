@@ -64,6 +64,15 @@ Follow-ups can be queued before the first message arrives. Expired, refused,
 and abandoned requests cannot receive addenda. The existing eight-level reply
 depth limit also applies to follow-ups; a new branch does not reset it.
 
+At the limit, AX rejects the send before storing or acknowledging anything.
+The error identifies the recipient and previous message. If you have authorized
+continuing in fresh threads, even as a standing instruction, the agent should
+use `send_message` immediately with the pending handoff, a short context summary,
+and that message ID. It does not need another approval or file search just to
+switch threads. After replacing a rejected reply, it acknowledges the original
+incoming message once the new send succeeds, then ends its turn. The new thread
+does not authorize replaying completed work or extending acknowledgment loops.
+
 When context is needed, `get_thread` reads retained messages between the two
 participants. Pass any message ID in that thread, then the returned
 `next_after_message_id` to continue. Each page contains at most twenty messages
@@ -96,6 +105,8 @@ When a coding session exits, AX automatically removes it from discovery and rele
 Saved conversations, identities, and mail remain on disk. Launching the same AX name restores its registration and resumes its conversation. Mail to a saved name, including replies after the requester exits, waits for its next launch, subject to expiration. Sending mail does not put an exited session back in discovery. `ax inbox NAME` and `ax status MESSAGE_ID` still show its delivery history.
 
 Queued, accepted by the host, fetched, and acknowledged are separate delivery states. Acknowledgment proves receipt, not completion of the delegated task.
+
+`ax status MESSAGE_ID` includes observed delivery-stage timings. See [readiness and latency measurement](latency.md) for missing-evidence semantics, bounded local samples, and the transport benchmark.
 
 Ask the original sending agent to resend an expired request by its message ID.
 The `resend_message` tool copies the full stored text and original recipient into

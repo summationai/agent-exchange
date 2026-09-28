@@ -57,7 +57,7 @@ func preparePi(_ context.Context, dir, file, _ string, s Session, args, env []st
 	}
 	guidance := strings.ReplaceAll(instructions, "MCP server", "AX extension")
 	guidance += " Pi tools use the ax_ prefix. AX custom messages contain the full peer body; no get_message call is needed."
-	options := object{"command": exe, "sessionFile": file, "tools": toolList(), "instructions": guidance}
+	options := object{"command": exe, "sessionFile": file, "tools": sessionTools(s), "instructions": guidance}
 	env = append(env, "AX_PI="+string(raw(options)))
 	return withAXOptions(args, []string{"-e", path}), env, noop, nil
 }

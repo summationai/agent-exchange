@@ -28,6 +28,14 @@ func compactMessage(m Message, content bool) object {
 // inspection retain their complete metadata and receipt history.
 func compactToolResult(method string, result any, key string) any {
 	switch method {
+	case "ax.check_inbox":
+		var received struct {
+			Message *Message `json:"message"`
+		}
+		if json.Unmarshal(raw(result), &received) == nil && received.Message != nil {
+			return object{"message": compactMessage(*received.Message, true)}
+		}
+		return result
 	case "ax.send", "ax.reply", "ax.resend", "ax.follow_up", "ax.get_message":
 		var m Message
 		if json.Unmarshal(raw(result), &m) != nil || m.ID == "" {
@@ -56,8 +64,13 @@ func compactToolResult(method string, result any, key string) any {
 		for _, a := range agents {
 			entry := object{"agent_id": a.ID, "name": a.Name, "host": a.Host, "state": a.State,
 				"online": a.Online, "policy": a.Policy}
+			if a.Host == "external" {
+				entry["delivery_mode"], entry["capabilities"] = a.DeliveryMode, a.Connectivity
+			}
 			if a.Capabilities != nil {
 				entry["delivery"] = object{"content": a.Capabilities.Content, "boundary": a.Capabilities.Boundary}
+			} else if a.Host == "external" {
+				entry["delivery"] = "host-provided; no negotiated native boundary"
 			} else {
 				entry["delivery"] = "legacy; capabilities unavailable"
 			}

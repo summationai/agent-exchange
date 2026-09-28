@@ -28,6 +28,7 @@ var toolSpecs = []struct {
 	read              bool
 }{
 	{"list_agents", "Discover the agents in this AX runtime and check their readiness.", nil, nil, true},
+	{"check_inbox", "Receive the next queued message on a user turn, only for endpoints without automatic wake. Call once when asked to check mail; never poll. This fetches content without acknowledging or executing it. Use reply or ack_message after handling it. Use list_pending to recover previously fetched messages.", nil, nil, false},
 	{"send_message", "Send a message to another named agent, such as api or web. Queued durably. End your turn after sending; AX wakes you for replies. Never poll or sleep waiting. Relay the user's task and constraints, including any requested external action; do not broaden the scope. Optional client_message_id is reused when retrying the same send.", map[string]string{"target": "Agent name or agent_id.", "text": "Literal peer message.", "client_message_id": "Optional idempotency key for retries.", "ttl_seconds": "Optional integer lifetime: 1 to 604800 seconds (7 days); defaults to 43200 (12 hours)."}, []string{"target", "text"}, false},
 	{"resend_message", "Resend an expired outgoing message by ID when requested. Preserves the full text and recipient in a new linked attempt. Never automatically replay tasks. End your turn after sending. Reuse client_message_id with unchanged arguments on retries.", map[string]string{"message_id": "Expired outgoing message ID.", "client_message_id": "Optional stable idempotency key for this resend attempt.", "ttl_seconds": "Optional integer lifetime: 1 to 604800 seconds (7 days); defaults to 43200 (12 hours)."}, []string{"message_id"}, false},
 	{"reply", "Reply to an AX message. The broker resolves the original sender; no address is needed.", map[string]string{"message_id": "Original message ID.", "text": "Reply body.", "client_message_id": "Optional idempotency key for retries.", "ttl_seconds": "Optional integer lifetime: 1 to 604800 seconds (7 days); defaults to 43200 (12 hours)."}, []string{"message_id", "text"}, false},
@@ -168,11 +169,17 @@ func (b *bridge) connectLoop() {
 		b.mu.Lock()
 		s := b.session
 		b.mu.Unlock()
-		caps, capErr := sessionCapabilities(s)
-		if capErr != nil {
-			c.close()
-			fmt.Fprintln(os.Stderr, "AX:", capErr)
-			return
+		// Generic attachments report tool/wake connectivity, but do not claim
+		// a built-in adapter's versioned native delivery contract.
+		var caps *deliveryCapabilities
+		if s.Host != "external" {
+			var capErr error
+			caps, capErr = sessionCapabilities(s)
+			if capErr != nil {
+				c.close()
+				fmt.Fprintln(os.Stderr, "AX:", capErr)
+				return
+			}
 		}
 		var connected struct {
 			Capabilities *deliveryCapabilities `json:"delivery_capabilities"`
@@ -183,7 +190,7 @@ func (b *bridge) connectLoop() {
 			fmt.Fprintln(os.Stderr, "AX:", e)
 			continue
 		}
-		if connected.Capabilities == nil && caps.Boundary == "idle" {
+		if connected.Capabilities == nil && caps != nil && caps.Boundary == "idle" {
 			c.close()
 			fmt.Fprintln(os.Stderr, "AX: this broker cannot negotiate idle delivery; update the broker before connecting this session")
 			return
@@ -293,7 +300,7 @@ func (b *bridge) bootstrap() {
 			b.mu.Unlock()
 			return
 		}
-		if s.Host == "claude" || s.Host == "codex" {
+		if s.Host == "claude" || s.Host == "codex" || s.Host == "external" {
 			return
 		}
 	}
@@ -359,6 +366,9 @@ func (b *bridge) deliver(c *client, m Message) {
 }
 
 func (b *bridge) notify(s Session, text string, meta object) error {
+	if s.DeliveryMode == "manual" {
+		return errors.New("endpoint has no automatic wake; check mail on its next user turn")
+	}
 	if s.Host == "pi" {
 		return b.emit(packet{Method: "notifications/ax/message", Params: raw(object{"content": text, "meta": meta, "native_session_id": s.Native})})
 	}
@@ -372,6 +382,9 @@ func (b *bridge) notify(s Session, text string, meta object) error {
 	}
 	if s.CodexRemote != "" {
 		return queueCodex(ctx, s, text)
+	}
+	if s.Host == "external" {
+		return errors.New("attached runtime has no native wake socket")
 	}
 	// Only fixed AX instructions and generated IDs enter the native user queue.
 	// Peer text is fetched through MCP, never submitted as a user prompt.
@@ -483,12 +496,30 @@ func runBridge(ctx context.Context, dir, file string, in io.Reader, out io.Write
 			if s.Host == "claude" {
 				caps["experimental"] = object{"claude/channel": object{}}
 			}
-			if e = b.emit(packet{ID: p.ID, Result: raw(object{"protocolVersion": args.Version, "capabilities": caps, "serverInfo": object{"name": "ax", "version": Version}, "instructions": "You are AX agent " + s.Name + ". " + instructions})}); e != nil {
+			if e = b.emit(packet{ID: p.ID, Result: raw(object{"protocolVersion": args.Version, "capabilities": caps, "serverInfo": object{"name": "ax", "version": Version}, "instructions": "You are AX agent " + s.Name + ". " + sessionInstructions(s)})}); e != nil {
 				return e
 			}
 		case "notifications/initialized":
+		case "notifications/ax/presence":
+			if s.Host != "external" {
+				break
+			}
+			var presence struct {
+				Native     string `json:"native_session_id"`
+				Permission string `json:"permission_mode"`
+				State      string `json:"state"`
+			}
+			if err := json.Unmarshal(p.Params, &presence); err != nil {
+				return err
+			}
+			if presence.State != "ready" && presence.State != "busy" && presence.State != "blocked" {
+				return errors.New("invalid attached runtime state")
+			}
+			if err := bindAdapter(dir, file, presence.Native, presence.Permission, presence.State); err != nil {
+				return err
+			}
 		case "tools/list":
-			e = b.emit(packet{ID: p.ID, Result: raw(object{"tools": toolList()})})
+			e = b.emit(packet{ID: p.ID, Result: raw(object{"tools": sessionTools(s)})})
 			b.mu.Lock()
 			b.toolsListed = e == nil
 			b.mu.Unlock()
@@ -505,6 +536,12 @@ func runBridge(ctx context.Context, dir, file string, in io.Reader, out io.Write
 			var result any
 			e = json.Unmarshal(p.Params, &call)
 			method := map[string]string{"list_agents": "ax.list", "list_pending": "ax.pending", "send_message": "ax.send", "resend_message": "ax.resend", "follow_up": "ax.follow_up", "get_thread": "ax.thread", "reply": "ax.reply", "get_message": "ax.get_message", "ack_message": "ax.ack", "delivery_status": "ax.status", "list_notifications": "ax.notifications", "ack_notification": "ax.ack_notification"}[call.Name]
+			if call.Name == "check_inbox" && s.DeliveryMode == "manual" {
+				method = "ax.check_inbox"
+			}
+			if call.Name == "spawn_agent" && s.Host == "external" {
+				e = errors.New("attached runtimes cannot launch agents through AX")
+			}
 			if e == nil && method == "" && call.Name != "spawn_agent" {
 				e = errors.New("unknown AX tool")
 			}
@@ -551,6 +588,9 @@ func runBridge(ctx context.Context, dir, file string, in io.Reader, out io.Write
 			if e == nil {
 				key, _ := clean["client_message_id"].(string)
 				result = compactToolResult(method, result, key)
+				if s.DeliveryMode == "manual" && (method == "ax.send" || method == "ax.reply" || method == "ax.resend" || method == "ax.follow_up") {
+					result.(object)["next_action"] = "End your turn. This endpoint has no automatic wake; check_inbox can fetch replies on a later user turn. Do not poll or sleep waiting."
+				}
 			}
 			// A stray AX_HOME gives a session its own broker and its own agents. The
 			// list alone cannot show that, so name the runtime it was read from.
@@ -561,6 +601,13 @@ func runBridge(ctx context.Context, dir, file string, in io.Reader, out io.Write
 			response := object{"isError": e != nil}
 			if e != nil {
 				failure := toolFailure(e, clean)
+				if method == "ax.check_inbox" {
+					var request *requestFailure
+					if errors.As(e, &request) && request.submitted {
+						failure["retryable"] = false
+						failure["recovery"] = "The receive outcome is unknown. Call list_pending once to find previously fetched mail before requesting another message."
+					}
+				}
 				body = string(raw(failure))
 				response["structuredContent"] = failure
 			}

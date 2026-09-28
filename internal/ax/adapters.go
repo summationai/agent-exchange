@@ -35,6 +35,7 @@ var harnesses = map[string]harnessAdapter{
 	"grok":     {toolPrefix: "ax__", nativeID: validNative, readyOnDiscovery: true},
 	"opencode": {toolPrefix: "ax_", nativeID: regexp.MustCompile(`^ses_[a-zA-Z0-9]+$`).MatchString, readyOnDiscovery: true},
 	"pi":       {toolPrefix: "ax_", nativeID: validNative, nameFlag: "--name", nativeLaunch: true},
+	"external": {toolPrefix: "ax.", nativeID: validID.MatchString, readyOnDiscovery: true},
 }
 
 func init() {
@@ -234,6 +235,7 @@ func notifyAdapter(ctx context.Context, s Session, text string) error {
 	if err != nil {
 		return err
 	}
+	req.Header.Set("Content-Type", "application/json")
 	res, err := (&http.Client{Transport: transport}).Do(req)
 	if err != nil {
 		return err

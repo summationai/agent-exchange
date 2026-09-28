@@ -476,6 +476,8 @@ harness, which also receives the name when it can display one.
 Ask either agent to message another by name.
 
   ax agents                     List local agents
+  ax attach -n NAME -s SESSION   Join an existing runtime over MCP stdio
+  ax verify NAME                Verify a request and reply with an agent
   ax inbox [-a NAME] [-t THREAD_ID] [-s STATE]  Inspect local delivery timelines
   ax spawn codex --name worker   Open a named peer in a new terminal pane
   ax spawn-status NAME          Inspect a previous pane launch
@@ -506,10 +508,43 @@ Ask either agent to message another by name.
 	defer cancel()
 	// Do not export GOMAXPROCS or apply inherited limits to native harnesses.
 	switch args[0] {
-	case "serve", "bridge", "hook", "inbox":
+	case "serve", "bridge", "hook", "inbox", "attach", "verify":
 		runtime.GOMAXPROCS(1)
 	}
 	switch args[0] {
+	case "attach":
+		inputInfo, err := os.Stdin.Stat()
+		if err != nil {
+			return err
+		}
+		if inputInfo.Mode()&os.ModeCharDevice != 0 {
+			return errors.New("configure ax attach as an MCP child with piped stdin; it is not an interactive terminal command")
+		}
+		// NewFile registers a nonblocking pipe with Go's poller, allowing Close
+		// to interrupt an idle MCP read when SIGTERM cancels this child.
+		inputFD := os.Stdin.Fd()
+		flags, err := unix.FcntlInt(inputFD, unix.F_GETFL, 0)
+		if err != nil {
+			return err
+		}
+		defer unix.FcntlInt(inputFD, unix.F_SETFL, flags)
+		fd, err := syscall.Dup(int(inputFD))
+		if err != nil {
+			return err
+		}
+		syscall.CloseOnExec(fd)
+		if err = syscall.SetNonblock(fd, true); err != nil {
+			syscall.Close(fd)
+			return err
+		}
+		input := os.NewFile(uintptr(fd), "AX MCP input")
+		defer input.Close()
+		return attach(ctx, dir, args[1:], input, os.Stdout, func() { os.Exit(75) })
+	case "verify":
+		if len(args) != 2 || !validName.MatchString(args[1]) {
+			return errors.New("usage: ax verify NAME")
+		}
+		return verifyAgent(ctx, dir, args[1], os.Stdout)
 	case "spawn":
 		result, err := spawnCLI(ctx, dir, args[1:])
 		if err != nil {
@@ -585,7 +620,7 @@ Ask either agent to message another by name.
 				fmt.Println("No AX agents yet. Launch a named session with ax HARNESS --name NAME.")
 			}
 			for _, a := range agents {
-				fmt.Printf("%-18s %-8s %-10s policy=%s\n", a.Name, a.Host, a.State, a.Policy)
+				fmt.Printf("%-18s %-8s %-10s policy=%s tools=%t wake=%s\n", a.Name, a.Host, a.State, a.Policy, a.Connectivity.Tools, a.Connectivity.Wake)
 				if a.Capabilities != nil {
 					fmt.Printf("  delivery: %s at %s (adapter %s)\n", a.Capabilities.Content, a.Capabilities.Boundary, a.Capabilities.AdapterVersion)
 				}

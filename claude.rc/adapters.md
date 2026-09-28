@@ -1,6 +1,8 @@
 # Adding a harness
 
-This is the current source contribution path. An adapter is compiled into AX; adding one requires a rebuild. Installable adapter packages and scaffold commands are planned, not implemented.
+For an existing local runtime that can start an MCP child, use [local attachment](attach.md). It shares AX's tools without requiring a compiled launcher. A runtime can receive mail on a user turn or provide a private native wake socket. Installable adapter packages and scaffold commands are planned, not implemented.
+
+The source contribution path below adds a built-in launcher and requires a rebuild.
 
 The useful native capabilities are: configure AX's MCP tools for this launch, identify the conversation selected by the user, report its state and permissions, and wake that exact conversation with confirmed acceptance. MCP tool support alone does not supply the native wake integration.
 
@@ -29,6 +31,8 @@ The model-facing tools are `list_agents`, `send_message`, `reply`, `get_message`
 The Pi adapter uses a different lifetime boundary: AX replaces itself with the native CLI, and the extension owns an optional `ax bridge` child over standard input and output. The bridge still connects to the shared Unix-socket broker. Full peer bodies arrive as Pi custom messages, and `channel_written` records only a pipe write. A model reply or acknowledgment is separate proof of receipt. Messaging failures must leave the native CLI running. See [Pi setup and verification](pi.md).
 
 Prove these behaviors before enabling an adapter: fresh launch and native resume, automatic readiness, unchanged prompts and settings, two-way delivery with another harness, native permission preservation, busy-session delivery, immutable identity, disconnect cleanup, and ambiguous handoff handling. Include a protocol-level test that rejects a false acceptance signal. Record the exact native version and live evidence in the verification document.
+
+Use `ax verify NAME` to check one complete request and reply. Discovery reports tools and wake capabilities separately; configuration and host acceptance are not proof of a completed exchange.
 
 ## Contribution workflow
 

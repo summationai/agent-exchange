@@ -91,7 +91,7 @@ func (b *broker) ackNotice(p *peer, id string) (any, error) {
 }
 
 func (b *broker) dispatchNotice(p *peer, now time.Time) {
-	if p.conn == nil || !p.ready || p.notice != "" || now.Before(p.noticeRetry) || p.State == "starting" || p.State == "blocked" || p.Native == "" || !safe(p) {
+	if p.DeliveryMode == "manual" || p.conn == nil || !p.ready || p.notice != "" || now.Before(p.noticeRetry) || p.State == "starting" || p.State == "blocked" || p.Native == "" || !safe(p) {
 		return
 	}
 	var data string

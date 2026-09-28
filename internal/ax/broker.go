@@ -39,6 +39,8 @@ type Agent struct {
 	AllowBypass  bool                  `json:"allow_bypass"`
 	BindingError string                `json:"binding_error,omitempty"`
 	Capabilities *deliveryCapabilities `json:"delivery_capabilities,omitempty"`
+	DeliveryMode string                `json:"delivery_mode,omitempty"`
+	Connectivity agentCapabilities     `json:"capabilities"`
 }
 type Message struct {
 	HandoffID     string           `json:"handoff_id,omitempty"` // Offer-only, never stored in the mailbox.
@@ -395,7 +397,7 @@ func (b *broker) request(c *serverConn, method string, params json.RawMessage) (
 		return nil, errors.New("invalid parameters")
 	}
 	if method == "ax.ping" {
-		return object{"version": "1"}, nil
+		return object{"version": "1", "local_attach": true}, nil
 	}
 	if method == "ax.enroll" {
 		s := a.Session
@@ -403,6 +405,9 @@ func (b *broker) request(c *serverConn, method string, params json.RawMessage) (
 		s.Native = a.Native
 		if !validName.MatchString(s.Name) || harnesses[s.Host].nativeID == nil || !validID.MatchString(s.ID) || len(s.Secret) < 32 || len(s.Mesh) != 24 {
 			return nil, errors.New("invalid session registration")
+		}
+		if s.Host == "external" && (s.DeliveryMode != "manual" && s.DeliveryMode != "adapter") || s.Host != "external" && s.DeliveryMode != "" {
+			return nil, errors.New("invalid delivery mode")
 		}
 		p := b.peers[s.ID]
 		if p == nil {
@@ -427,6 +432,7 @@ func (b *broker) request(c *serverConn, method string, params json.RawMessage) (
 			p.Permission = "unknown"
 			p.AllowBypass = s.AllowBypass
 			p.Mesh = s.Mesh
+			p.DeliveryMode = s.DeliveryMode
 			if e := b.save(p); e != nil {
 				return nil, e
 			}
@@ -441,7 +447,7 @@ func (b *broker) request(c *serverConn, method string, params json.RawMessage) (
 		if names != 0 {
 			return nil, errors.New("name already in use; resume its saved AX identity")
 		}
-		p = &peer{Agent: Agent{ID: s.ID, Name: s.Name, Host: s.Host, Mesh: s.Mesh, Native: s.Native, State: "starting", Permission: "unknown", Policy: "accept", AllowBypass: s.AllowBypass}, hash: digest(s.Secret)}
+		p = &peer{Agent: Agent{ID: s.ID, Name: s.Name, Host: s.Host, Mesh: s.Mesh, Native: s.Native, State: "starting", Permission: "unknown", Policy: "accept", AllowBypass: s.AllowBypass, DeliveryMode: s.DeliveryMode}, hash: digest(s.Secret)}
 		if e := b.save(p); e != nil {
 			return nil, e
 		}
@@ -647,6 +653,8 @@ func (b *broker) request(c *serverConn, method string, params json.RawMessage) (
 			return nil, err
 		}
 		return b.pending(p, after)
+	case "ax.check_inbox":
+		return b.checkInbox(p)
 	case "ax.thread":
 		return b.thread(p, a.MessageID, a.AfterMessage)
 	case "ax.send", "ax.reply", "ax.resend", "ax.follow_up":
@@ -1008,7 +1016,7 @@ func (b *broker) dispatch() {
 				}
 				continue
 			}
-			if p.conn == nil || !p.ready || p.State == "starting" || p.State == "blocked" || p.Native == "" || p.Policy != "accept" || !safe(p) || boundaryWait(p) {
+			if p.DeliveryMode == "manual" || p.conn == nil || !p.ready || p.State == "starting" || p.State == "blocked" || p.Native == "" || p.Policy != "accept" || !safe(p) || boundaryWait(p) {
 				break
 			}
 			m, e := b.message(id)

@@ -52,6 +52,11 @@ func (b *bridge) toolCall(ctx context.Context, meta json.RawMessage, method stri
 		if err == nil {
 			return nil
 		}
+		// A lost receive response may already have consumed the next queued item.
+		// Recover it through list_pending, never silently receive another item.
+		if method == "ax.check_inbox" && submitted {
+			break
+		}
 		var transport *transportError
 		if !errors.As(err, &transport) {
 			break

@@ -33,6 +33,7 @@ type Session struct {
 	AllowBypass      bool            `json:"allow_bypass"`
 	CodexRemote      string          `json:"codex_remote,omitempty"`
 	AdapterSocket    string          `json:"adapter_socket,omitempty"`
+	DeliveryMode     string          `json:"delivery_mode,omitempty"`
 	DeliveryBoundary string          `json:"delivery_boundary,omitempty"`
 	Terminal         terminalContext `json:"terminal,omitempty"`
 	SpawnRoot        string          `json:"spawn_root,omitempty"`

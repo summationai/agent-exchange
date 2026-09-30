@@ -20,13 +20,19 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-var Version = "0.7.1" // Development builds may set this with the Go linker.
+var Version = "0.8.0-dev" // Development builds may set this with the Go linker.
 
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'" }
 
-// AX owns only name. Preserve every other argument, including native subcommands
+// AX owns name and external policy. Preserve other arguments, including native subcommands
 // and the host's end-of-options separator.
 func launchArgs(args []string) (string, []string, error) {
+	name, _, native, err := launchOptions(args)
+	return name, native, err
+}
+
+func launchOptions(args []string) (string, string, []string, error) {
+	external := os.Getenv("AX_EXTERNAL")
 	var name string
 	var native []string
 	legacy := false
@@ -37,9 +43,17 @@ func launchArgs(args []string) (string, []string, error) {
 			break
 		}
 		legacy = legacy || arg == "-name" || strings.HasPrefix(arg, "-name=")
-		if arg == "--name" || arg == "-n" {
+		if arg == "--external" {
 			if i+1 == len(args) {
-				return "", nil, errors.New("name needs a value")
+				return "", "", nil, errors.New("external needs a value")
+			}
+			i++
+			external = args[i]
+		} else if strings.HasPrefix(arg, "--external=") {
+			external = strings.TrimPrefix(arg, "--external=")
+		} else if arg == "--name" || arg == "-n" {
+			if i+1 == len(args) {
+				return "", "", nil, errors.New("name needs a value")
 			}
 			i++
 			name = args[i]
@@ -52,11 +66,14 @@ func launchArgs(args []string) (string, []string, error) {
 	if !validName.MatchString(name) {
 		// -name was the AX option through 0.6; it is now an ordinary native argument.
 		if legacy {
-			return "", nil, errors.New("-name is no longer the AX name option; use --name api or -n api")
+			return "", "", nil, errors.New("-name is no longer the AX name option; use --name api or -n api")
 		}
-		return "", nil, errors.New("choose an AX name with --name api or -n api")
+		return "", "", nil, errors.New("choose an AX name with --name api or -n api")
 	}
-	return name, native, nil
+	if !validExternal(external) {
+		return "", "", nil, errors.New("external must be refuse, verified, or all")
+	}
+	return name, external, native, nil
 }
 
 const flagProbeTimeout = 3 * time.Second
@@ -95,7 +112,7 @@ func Launch(ctx context.Context, dir, host string, args []string) error {
 }
 
 func launch(ctx context.Context, dir, host string, args []string, spawnToken string) error {
-	name, nativeArgs, e := launchArgs(args)
+	name, external, nativeArgs, e := launchOptions(args)
 	if e != nil {
 		return e
 	}
@@ -175,6 +192,7 @@ func launch(ctx context.Context, dir, host string, args []string, spawnToken str
 	if s.ClaudePending != "" && !missingClaudeTranscript(s.ClaudePending) {
 		s.ClaudePending = ""
 	}
+	s.External = external
 	s.AllowBypass = bypass || os.Getenv("AX_ALLOW_BYPASS") == "1"
 	if e = saveSession(path, s); e != nil {
 		return e
@@ -485,6 +503,7 @@ Ask either agent to message another by name.
   ax resolve MESSAGE_ID abandon Release a stuck message without redelivery
   ax policy NAME hold           Pause incoming mail (accept/hold/refuse)
   ax doctor                     Diagnose harnesses, Channels, and local discovery
+  ax external NAME POLICY       Set external policy: refuse, verified, all
   ax version                    Show the AX version`)
 		return nil
 	}
@@ -599,7 +618,7 @@ Ask either agent to message another by name.
 	case "doctor":
 		doctor(ctx, dir, os.Stdout)
 		return nil
-	case "agents", "status", "policy", "resolve":
+	case "agents", "status", "policy", "external", "resolve":
 		if e = ensureBroker(dir); e != nil {
 			return e
 		}
@@ -620,7 +639,11 @@ Ask either agent to message another by name.
 				fmt.Println("No AX agents yet. Launch a named session with ax HARNESS --name NAME.")
 			}
 			for _, a := range agents {
-				fmt.Printf("%-18s %-8s %-10s policy=%s tools=%t wake=%s\n", a.Name, a.Host, a.State, a.Policy, a.Connectivity.Tools, a.Connectivity.Wake)
+				kind := ""
+				if a.Kind != "" {
+					kind = " kind=" + a.Kind + " permission=" + a.Permission
+				}
+				fmt.Printf("%-18s %-8s %-10s policy=%s external=%s%s tools=%t wake=%s\n", a.Name, a.Host, a.State, a.Policy, externalPolicy(a), kind, a.Connectivity.Tools, a.Connectivity.Wake)
 				if a.Capabilities != nil {
 					fmt.Printf("  delivery: %s at %s (adapter %s)\n", a.Capabilities.Content, a.Capabilities.Boundary, a.Capabilities.AdapterVersion)
 				}
@@ -639,6 +662,11 @@ Ask either agent to message another by name.
 				return errors.New("usage: ax resolve MESSAGE_ID abandon")
 			}
 			e = c.call("ax.abandon", object{"message_id": args[1]}, &result)
+		case "external":
+			if len(args) != 3 {
+				return errors.New("usage: ax external NAME refuse|verified|all")
+			}
+			e = c.call("ax.external", object{"target": args[1], "external": args[2]}, &result)
 		case "policy":
 			if len(args) != 3 {
 				return errors.New("usage: ax policy NAME accept|hold|refuse")

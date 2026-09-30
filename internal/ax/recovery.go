@@ -101,5 +101,15 @@ func toolFailure(err error, args object) object {
 			}
 		}
 	}
+	if errors.As(err, &rpc) && rpc.Code == externalPolicyCode {
+		failure["code"] = "external_policy"
+		failure["rpc_code"] = rpc.Code
+		failure["submission"] = "not_submitted"
+		failure["retryable"] = false
+		for key, value := range rpc.Data {
+			failure[key] = value
+		}
+		failure["recovery"] = "The recipient owner must open its external policy before this message can be sent."
+	}
 	return failure
 }

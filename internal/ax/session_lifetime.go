@@ -104,6 +104,7 @@ func (b *broker) reapSession(p *peer, now time.Time) {
 	}
 	b.uncertain(p.ID, p.epoch)
 	delete(b.peers, p.ID)
+	b.peersChanged()
 }
 
 // Exited recipients are absent from dispatch. Expire their queued work in a

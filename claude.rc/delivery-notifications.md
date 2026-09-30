@@ -34,3 +34,13 @@ This introduces mailbox schema version 3. Older AX binaries reject that version
 rather than silently ignoring notification state. Do not install an older broker
 against an upgraded mailbox. The schema is upgraded when the new broker opens
 the mailbox; this source change does not replace any running process.
+
+## Relay sender notices
+
+Relay senders also receive `acknowledged` after an explicit acknowledgment without
+a reply, and `abandoned` after owner recovery. These are stored atomically with
+the terminal state. A reply itself reaches the relay, so it does not produce an
+extra acknowledgment notice. Ordinary session senders keep the existing expiry
+and refusal notifications. MCP delivery carries the complete notice JSON with
+`meta.kind: ax_delivery_status`; `ack_notification` and restart semantics are
+unchanged. Relay support moves the mailbox to schema 4; older brokers refuse it.

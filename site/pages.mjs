@@ -1,4 +1,5 @@
 export const pages = [
+  { slug: 'relays', source: 'claude.rc/relay.md', title: 'Relay endpoints', group: 'Reference', description: 'Deliver external data with provenance, an owner policy, and MCP notifications.' },
   { slug: '', source: 'claude.rc/getting-started.md', title: 'Your first exchange', group: 'Get started', description: 'Give two agents names. Send your first message between them.' },
   { slug: 'installation', source: 'AGENTS.md', title: 'Install Agent Exchange', group: 'Get started', description: 'Prebuilt binaries for macOS and Linux. Windows users can join through WSL 2.' },
   { slug: 'sessions', source: 'claude.rc/README.md', title: 'Sessions and permissions', group: 'Get started', description: 'Launch, resume, and delegate work while keeping your harness’s native controls.' },

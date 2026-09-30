@@ -12,8 +12,12 @@ import (
 	"time"
 )
 
-const maxFrame = 512 << 10 // JSON escaping can expand a 64 KiB text body sixfold.
+// Content is JSON inside an MCP text string: control-heavy text expands sevenfold,
+// while escaped data and provenance can double. Keep room for message metadata.
+const maxFrame = 576 << 10
 const maxText = 64 << 10
+const maxData = 32 << 10
+const externalPolicyCode = -32002
 
 type object = map[string]any
 
@@ -93,6 +97,7 @@ type client struct {
 	offers    chan Message
 	notices   chan deliveryNotice
 	lifecycle chan struct{}
+	peers     chan struct{}
 	done      chan struct{}
 }
 
@@ -105,7 +110,7 @@ func dial(path string) (*client, error) {
 }
 
 func newClient(conn net.Conn) *client {
-	c := &client{conn: conn, writing: make(chan struct{}, 1), pending: map[string]chan packet{}, offers: make(chan Message, 8), notices: make(chan deliveryNotice, 1), lifecycle: make(chan struct{}, 1), done: make(chan struct{})}
+	c := &client{conn: conn, writing: make(chan struct{}, 1), pending: map[string]chan packet{}, offers: make(chan Message, 8), notices: make(chan deliveryNotice, 1), lifecycle: make(chan struct{}, 1), peers: make(chan struct{}, 1), done: make(chan struct{})}
 	go func() {
 		defer c.close()
 		for {
@@ -113,7 +118,12 @@ func newClient(conn net.Conn) *client {
 			if e != nil {
 				return
 			}
-			if p.Method == "ax.lifecycle.changed" {
+			if p.Method == "ax.peers.changed" {
+				select {
+				case c.peers <- struct{}{}:
+				default:
+				}
+			} else if p.Method == "ax.lifecycle.changed" {
 				// State is read from the trusted session file; duplicate hints coalesce.
 				select {
 				case c.lifecycle <- struct{}{}:

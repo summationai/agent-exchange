@@ -145,7 +145,7 @@ func (b *broker) sendResult(q interface{ QueryRow(string, ...any) *sql.Row }, m 
 		return m, err
 	}
 	if m.State == "queued" {
-		r.Evidence += " " + queueReason(to, b.peers[m.Sender.ID])
+		r.Evidence += " " + messageQueueReason(to, b.peers[m.Sender.ID], m)
 	}
 	m.Receipt = r
 	return m, nil
@@ -155,6 +155,7 @@ type pendingSender struct {
 	ID   string `json:"agent_id"`
 	Name string `json:"name"`
 	Host string `json:"host"`
+	Kind string `json:"kind,omitempty"`
 }
 
 type pendingMessage struct {
@@ -208,7 +209,7 @@ func (b *broker) pending(p *peer, after int64) (pendingPage, error) {
 		if err = json.Unmarshal([]byte(data), &m); err != nil {
 			return out, err
 		}
-		item := pendingMessage{ID: m.ID, Sender: pendingSender{m.Sender.ID, m.Sender.Name, m.Sender.Host}, Seq: m.Seq, Parent: m.Parent, ResendOf: m.ResendOf, Thread: m.Thread, Age: max(0, (out.At-m.Created)/1000), Expires: m.Expires, State: state, Evidence: deliveryEvidence(state)}
+		item := pendingMessage{ID: m.ID, Sender: pendingSender{m.Sender.ID, m.Sender.Name, m.Sender.Host, m.Sender.Kind}, Seq: m.Seq, Parent: m.Parent, ResendOf: m.ResendOf, Thread: m.Thread, Age: max(0, (out.At-m.Created)/1000), Expires: m.Expires, State: state, Evidence: deliveryEvidence(state)}
 		sender := b.peers[m.Sender.ID]
 		if sender == nil {
 			sender = &peer{}
@@ -216,12 +217,12 @@ func (b *broker) pending(p *peer, after int64) (pendingPage, error) {
 				return out, err
 			}
 		}
-		if state != "queued" && p.Policy == "accept" && safe(p) && sender != nil && safe(sender) {
+		if state != "queued" && p.Policy == "accept" && safe(p) && sender != nil && safe(sender) && externalHandoff(p, m) {
 			preview := []rune(m.Text)
 			item.Preview = string(preview[:min(len(preview), 100)])
 		}
 		if state == "queued" {
-			item.Evidence += " " + queueReason(p, sender)
+			item.Evidence += " " + messageQueueReason(p, sender, m)
 			if headSeq < m.Seq {
 				item.BlockedBy = headID
 				item.Evidence += " An earlier message is " + headState + " and blocks this FIFO handoff."

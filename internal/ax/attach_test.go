@@ -18,9 +18,10 @@ import (
 )
 
 type attachedMCP struct {
-	conn net.Conn
-	read *json.Decoder
-	next int
+	conn          net.Conn
+	read          *json.Decoder
+	next          int
+	notifications []packet
 }
 
 func startAttachedMCP(t *testing.T, dir string, args ...string) *attachedMCP {
@@ -52,8 +53,14 @@ func (m *attachedMCP) rpc(t *testing.T, method string, args any) json.RawMessage
 		t.Fatal(err)
 	}
 	var p packet
-	if err := m.read.Decode(&p); err != nil {
-		t.Fatal(err)
+	for {
+		if err := m.read.Decode(&p); err != nil {
+			t.Fatal(err)
+		}
+		if len(p.ID) > 0 {
+			break
+		}
+		m.notifications = append(m.notifications, p)
 	}
 	if string(p.ID) != string(raw(m.next)) || p.Error != nil {
 		t.Fatalf("bad RPC response: %+v", p)

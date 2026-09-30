@@ -5,6 +5,7 @@ Claude Code     Codex CLI     Grok Build     OpenCode
      ↕              ↕             ↕             ↕
 native Channel  app server   native leader   TUI plugin
      ↕              ↕             ↕             ↕
+External bridges ↔ AX relay MCP children
               AX MCP bridges
                     ↕
          one private local Go broker
@@ -23,3 +24,9 @@ The broker distinguishes storage, native acceptance, content fetch, and model ac
 Each connection is fenced by a lease epoch. A stale bridge cannot acknowledge a new connection's offers. The broker uses a private Unix socket and SQLite WAL; session files contain per-endpoint credentials with owner-only permissions. MCP exposes messaging operations, never enrollment, lifecycle, policy changes, or recovery controls.
 
 Harness adapters share the broker, message schema, MCP tools, and delegation policy. They own native configuration, immutable conversation binding, readiness, wake acceptance, and cleanup. Claude and Codex retain their existing paths; the new adapter registry allows other harnesses to use the same messaging core.
+
+Relay endpoints add an external-data path alongside local peer delegation. Only
+a relay can assert provenance; the recipient owner's external policy defaults to
+refuse, and guidance follows provenance. Opaque structured data travels with the
+text. Attached hosts may receive messages, sender notices, and coalesced agent
+changes over their MCP pipe. See [the relay contract](relay.md).

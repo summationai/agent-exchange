@@ -88,3 +88,15 @@ Discovery separates tool readiness from wake mode and confirmation semantics. A 
 `ax verify` sends one harmless challenge, then waits up to 60 seconds for a reply from that exact agent containing the expected token. An acknowledgment, wake receipt, wrong token, or old reply cannot pass. For a manual endpoint, give the agent a user turn to check its inbox while verification runs. The command uses the reserved local name `ax-verifier` and does not launch a coding agent. It reports its result for this exchange, not a permanent health guarantee.
 
 Adapter authors should also verify fresh attachment, resume, concurrent-name rejection, host permission changes, busy delivery, disconnect recovery, and uncertain wake handling. Kill only the adapter child during a failure test and confirm the native conversation remains usable. Tests in `internal/ax/attach_test.go` exercise the shared contract with a simulated MCP host and native wake callback; they are not live Muse, Grok Bot, or ChatGPT certification.
+
+## Relay endpoints and MCP notifications
+
+`ax attach --relay -n NAME` enrolls a program that bridges external content. It
+requires provenance on every send, receives over MCP, and cannot spawn agents.
+Targets refuse external messages until their owner explicitly opens the policy.
+`ax attach -n NAME -s ID -p PERMISSION --notify` enables the same pipe delivery for
+an ordinary attached runtime; `--notify` cannot be combined with `-w`.
+
+See [Relay endpoints](relay.md) for field schemas, owner controls, notifications,
+restart recovery, and the broker/bridge upgrade boundary. Manual and wake-socket
+attachments retain their existing behavior.

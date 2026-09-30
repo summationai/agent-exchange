@@ -25,6 +25,8 @@ type agentCapabilities struct {
 func capabilities(p *peer, online bool) agentCapabilities {
 	c := agentCapabilities{Tools: online && p.ready, Wake: "native", Confirmation: "host_acceptance"}
 	switch {
+	case p.DeliveryMode == "mcp":
+		c.Wake, c.Confirmation = "mcp", "channel_write"
 	case p.DeliveryMode == "manual":
 		c.Wake, c.Confirmation = "user_turn", "content_fetch"
 	case p.Host == "claude" || p.Host == "pi":
@@ -41,14 +43,39 @@ func attach(ctx context.Context, dir string, args []string, in io.Reader, out io
 	name := f.String("n", "", "AX name")
 	native := f.String("s", "", "stable native conversation ID")
 	permission := f.String("p", "unknown", "native permission mode")
+	relay := f.Bool("relay", false, "external relay endpoint")
+	notify := f.Bool("notify", false, "receive MCP notifications")
+	external := f.String("external", os.Getenv("AX_EXTERNAL"), "external policy: refuse, verified, all")
 	wake := f.String("w", "", "private native wake socket")
 	if err := f.Parse(args); err != nil {
 		return err
+	}
+	if !validExternal(*external) {
+		return errors.New("external must be refuse, verified, or all")
+	}
+	kind := ""
+	if *relay {
+		invalid := false
+		f.Visit(func(flag *flag.Flag) {
+			if flag.Name == "s" || flag.Name == "p" || flag.Name == "w" {
+				invalid = true
+			}
+		})
+		if invalid {
+			return errors.New("usage: ax attach --relay -n NAME [--external POLICY]")
+		}
+		kind, *native, *permission, *notify = "relay", "relay-"+*name, "relay", true
+	}
+	if *notify && *wake != "" {
+		return errors.New("--notify cannot be combined with -w")
 	}
 	if f.NArg() != 0 || !validName.MatchString(*name) || !validID.MatchString(*native) {
 		return errors.New("usage: ax attach -n NAME -s SESSION_ID [-p PERMISSION] [-w PRIVATE_SOCKET]")
 	}
 	mode := "manual"
+	if *notify {
+		mode = "mcp"
+	}
 	if *wake != "" {
 		// The local adapter belongs to the same OS user. Never accept HTTP URLs
 		// or public listeners through this attachment path.
@@ -61,7 +88,7 @@ func attach(ctx context.Context, dir string, args []string, in io.Reader, out io
 		}
 		mode = "adapter"
 	}
-	s, file, release, err := attachedSession(dir, *name, *native, mode, *wake)
+	s, file, release, err := attachedSessionOptions(dir, *name, *native, mode, *wake, kind, *external)
 	if err != nil {
 		return err
 	}
@@ -85,6 +112,10 @@ func attach(ctx context.Context, dir string, args []string, in io.Reader, out io
 }
 
 func attachedSession(dir, name, native, mode, socket string) (Session, string, func(), error) {
+	return attachedSessionOptions(dir, name, native, mode, socket, "", "")
+}
+
+func attachedSessionOptions(dir, name, native, mode, socket, kind, external string) (Session, string, func(), error) {
 	var s Session
 	noop := func() {}
 	if err := ensureBroker(dir); err != nil {
@@ -97,12 +128,16 @@ func attachedSession(dir, name, native, mode, socket string) (Session, string, f
 	defer c.close()
 	var features struct {
 		LocalAttach bool `json:"local_attach"`
+		Relay       bool `json:"relay"`
 	}
 	if err = c.call("ax.ping", object{}, &features); err != nil {
 		return s, "", noop, err
 	}
 	if !features.LocalAttach {
 		return s, "", noop, errors.New("running broker does not support local attachment; finish the broker update before attaching")
+	}
+	if (kind == "relay" || mode == "mcp" || external != "" && external != "refuse") && !features.Relay {
+		return s, "", noop, errors.New("running broker does not support relays; finish the broker update before attaching")
 	}
 	sessions := filepath.Join(dir, "sessions")
 	if err = privateDir(sessions); err != nil {
@@ -125,11 +160,11 @@ func attachedSession(dir, name, native, mode, socket string) (Session, string, f
 	}()
 	s, err = loadSession(file)
 	if os.IsNotExist(err) {
-		s = Session{ID: randomID("agt_"), Secret: randomID("") + randomID(""), Name: name, Host: "external", Native: native}
+		s = Session{ID: randomID("agt_"), Secret: randomID("") + randomID(""), Name: name, Host: "external", Native: native, Kind: kind}
 	} else if err != nil {
 		return s, "", noop, err
 	}
-	if s.Host != "external" || s.Native != native || s.SpawnToken != "" {
+	if s.Host != "external" || s.Native != native || s.Kind != kind || s.SpawnToken != "" {
 		return s, "", noop, errors.New("AX name belongs to another runtime or conversation; choose a new name")
 	}
 	s.Workspace, err = os.Getwd()
@@ -141,6 +176,7 @@ func attachedSession(dir, name, native, mode, socket string) (Session, string, f
 		return s, "", noop, err
 	}
 	s.DeliveryMode, s.AdapterSocket = mode, socket
+	s.External = external
 	s.Started, s.BindingError = true, ""
 	s.AllowBypass = os.Getenv("AX_ALLOW_BYPASS") == "1"
 	if err = saveSession(file, s); err != nil {
@@ -181,6 +217,9 @@ func (b *broker) checkInbox(p *peer) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	if !externalHandoff(p, m) {
+		return object{"message": nil}, nil
+	}
 	sender, err := b.messagePeer(b.db, m.Sender.ID)
 	if err != nil {
 		return nil, err
@@ -207,6 +246,9 @@ func sessionTools(s Session) []object {
 	for _, tool := range toolList() {
 		if tool["name"] == "check_inbox" && s.DeliveryMode != "manual" || tool["name"] == "spawn_agent" && s.Host == "external" {
 			continue
+		}
+		if s.Kind != "relay" {
+			delete(tool["inputSchema"].(object)["properties"].(object), "provenance")
 		}
 		if s.DeliveryMode == "manual" {
 			tool["description"] = strings.ReplaceAll(tool["description"].(string), "AX wakes you for replies.", "Replies can be fetched on your next user turn.")

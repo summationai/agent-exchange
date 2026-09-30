@@ -42,6 +42,9 @@ func (d inboxDetail) text(now time.Time) string {
 	} else {
 		lines = append(lines, "Queue-time context unavailable (legacy history).")
 	}
+	if len(m.Provenance) > 0 {
+		lines = append(lines, "Provenance: "+string(m.Provenance))
+	}
 	lines = append(lines, "", "Observed timeline (broker clock):")
 	for _, stage := range []struct{ key, label string }{
 		{"queued", "Durable queue"}, {"handoff_started", "Handoff started"},

@@ -134,16 +134,17 @@ func (b *broker) thread(p *peer, id, after string) (threadPage, error) {
 			}
 			state := item.State
 			offered := state == "handoff_started" || state == "delivery_uncertain" || state == "wake_accepted" || state == "channel_written" || state == "content_served" || state == "acknowledged"
-			if !offered || p.Policy != "accept" || !safe(p) || !safe(sender) {
+			if !offered || p.Policy != "accept" || !safe(p) || !safe(sender) || !externalHandoff(p, item.Message) {
 				item.Text = ""
+				item.Data, item.Provenance = nil, nil
 				item.Withheld = true
 			}
 		}
-		if len(out.Messages) == threadPageSize || (len(out.Messages) > 0 && used+len(item.Text) > maxText) {
+		if len(out.Messages) == threadPageSize || (len(out.Messages) > 0 && used+len(item.Text)+len(item.Data)+len(item.Provenance) > maxText) {
 			out.Next = out.Messages[len(out.Messages)-1].ID
 			break
 		}
-		used += len(item.Text)
+		used += len(item.Text) + len(item.Data) + len(item.Provenance)
 		out.Messages = append(out.Messages, item)
 	}
 	return out, nil

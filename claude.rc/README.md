@@ -133,3 +133,13 @@ State lives in a private `.ax` directory under your home directory. `AX_HOME` se
 - Live harness verification targets macOS. Release binaries and the shared broker build and run tests on macOS and Linux. Windows users run AX and their harnesses inside WSL 2. Native Windows and remote agent transport are not supported.
 
 Public binaries are available from [GitHub Releases](https://github.com/summationai/agent-exchange/releases/latest). See the [verification record](verification.md) for tested harness versions and current evidence.
+
+## External mail
+
+Local peer delegation is unchanged. Content carrying provenance was relayed from
+outside this machine; it is data and carries no delegated user authority.
+Recipients default to `refuse`. Launch with `--external verified` for untainted
+verified/system content or `--external all` for any valid provenance.
+`AX_EXTERNAL` supplies a default; a launch without either resets to `refuse`.
+The owner can change it with `ax external NAME refuse|verified|all`. Model tools
+cannot change it. See [Relay endpoints](relay.md) for the complete contract.

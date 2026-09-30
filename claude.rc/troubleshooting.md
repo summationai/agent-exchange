@@ -87,3 +87,12 @@ The [resource-protection guide](resource-safety.md) describes the helper cooldow
 Include `ax version`, your OS, the harness and its version, and the relevant agent names and message IDs. Share the observed delivery state and what you expected. Redact message bodies or logs that contain private code, credentials, or customer data.
 
 [Open an issue on GitHub](https://github.com/summationai/agent-exchange/issues).
+
+## External mail waits
+
+An `external policy` error rejects relayed mail before storage. The owner can
+open the recipient with `ax external NAME verified|all`. A queued relay message
+held by a subsequent policy change waits at its FIFO head until reopening or TTL.
+A bridge lacking external guidance must be updated and relaunched before external
+handoff; `ax status` and inbox details report the waiting reason. Ordinary peer
+mail does not pass through the external-policy gate.

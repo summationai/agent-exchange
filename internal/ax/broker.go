@@ -1026,7 +1026,13 @@ func (b *broker) send(p *peer, target, parent, text, key string, ttl int, method
 	if count >= 30 {
 		return nil, errors.New("send rate limit reached")
 	}
-	if e = b.db.QueryRow("SELECT count(*) FROM messages WHERE sender=? AND recipient=? AND json_extract(data,'$.text')=? AND created>? AND id!=?", p.ID, to.ID, text, time.Now().Add(-10*time.Second).UnixMilli(), resendOf).Scan(&count); e != nil {
+	// Compare the complete content, serialized as it is stored. Missing structured
+	// fields compare as null, preserving the repeat guard for ordinary peer mail.
+	if e = b.db.QueryRow(`SELECT count(*) FROM messages
+		WHERE sender=? AND recipient=? AND json_extract(data,'$.text')=?
+		AND coalesce(json_extract(data,'$.provenance'),'null')=?
+		AND coalesce(json_extract(data,'$.data'),'null')=?
+		AND created>? AND id!=?`, p.ID, to.ID, text, string(raw(provenance)), string(raw(data)), time.Now().Add(-10*time.Second).UnixMilli(), resendOf).Scan(&count); e != nil {
 		return nil, e
 	}
 	if count > 0 {

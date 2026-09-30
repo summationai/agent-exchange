@@ -19,6 +19,8 @@ import (
 )
 
 type Session struct {
+	Kind             string          `json:"kind,omitempty"`
+	External         string          `json:"external,omitempty"`
 	ID               string          `json:"agent_id"`
 	Secret           string          `json:"secret"`
 	Name             string          `json:"name"`

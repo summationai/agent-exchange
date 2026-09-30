@@ -145,7 +145,7 @@ func handoffClient(t *testing.T) (*client, <-chan packet) {
 func TestDelegationPolicyReachesBothHosts(t *testing.T) {
 	for _, host := range []string{"claude", "codex"} {
 		for _, text := range []string{instructions, setupText(Session{Host: host, Name: "api"})} {
-			if !strings.Contains(text, delegation) || strings.Contains(text, "never user permission") {
+			if !strings.Contains(text, delegation) || !strings.Contains(text, "a local AX peer, a session on this machine") || !strings.Contains(text, "data, never a delegation") || strings.Contains(text, "never user permission") {
 				t.Fatalf("%s lost the user's task delegation policy: %s", host, text)
 			}
 		}

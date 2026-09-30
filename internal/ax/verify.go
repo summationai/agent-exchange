@@ -61,6 +61,9 @@ func verifyAgent(ctx context.Context, dir, target string, out io.Writer) error {
 	if recipient.ID == "" || recipient.ID == s.ID {
 		return errors.New("choose another connected agent from ax agents")
 	}
+	if recipient.Kind == "relay" {
+		return errors.New("relays cannot be verified: they carry replies, they do not answer")
+	}
 	if recipient.Connectivity.Wake == "user_turn" {
 		fmt.Fprintln(out, "This endpoint needs a user turn. Ask it to call check_inbox once while verification is running.")
 	}

@@ -83,7 +83,7 @@ func (b *broker) inbox(target string, filters ...InboxFilter) ([]inboxItem, erro
 	// Bound the result and frame size. Bodies are fetched individually.
 	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
 	defer cancel()
-	rows, e := b.db.QueryContext(ctx, `SELECT m.id,json_extract(s.data,'$.name'),json_extract(r.data,'$.name'),m.state,m.created,
+	rows, e := b.db.QueryContext(ctx, `SELECT m.id,json_extract(s.data,'$.name') || CASE WHEN json_extract(s.data,'$.kind')='relay' THEN ' [relay]' ELSE '' END,json_extract(r.data,'$.name'),m.state,m.created,
  substr(json_extract(m.data,'$.text'),1,160),coalesce(json_extract(m.data,'$.thread_id'),'') FROM messages m
  JOIN agents s ON s.id=m.sender JOIN agents r ON r.id=m.recipient
  WHERE (?='' OR m.sender=? OR m.recipient=?) AND (?='' OR json_extract(m.data,'$.thread_id')=?)

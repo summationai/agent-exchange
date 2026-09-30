@@ -27,22 +27,27 @@ var validName = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_-]{0,47}$`)
 var validID = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,80}$`)
 
 type Agent struct {
-	ID           string                `json:"agent_id"`
-	Name         string                `json:"name"`
-	Host         string                `json:"host"`
-	Mesh         string                `json:"mesh"`
-	Native       string                `json:"native_session_id,omitempty"`
-	Permission   string                `json:"permission_mode"`
-	State        string                `json:"state"`
-	Policy       string                `json:"policy"`
-	Online       bool                  `json:"online"`
-	AllowBypass  bool                  `json:"allow_bypass"`
-	BindingError string                `json:"binding_error,omitempty"`
-	Capabilities *deliveryCapabilities `json:"delivery_capabilities,omitempty"`
-	DeliveryMode string                `json:"delivery_mode,omitempty"`
-	Connectivity agentCapabilities     `json:"capabilities"`
+	Kind           string                `json:"kind,omitempty"`
+	External       string                `json:"external,omitempty"`
+	NotifyTerminal bool                  `json:"notify_terminal,omitempty"`
+	ID             string                `json:"agent_id"`
+	Name           string                `json:"name"`
+	Host           string                `json:"host"`
+	Mesh           string                `json:"mesh"`
+	Native         string                `json:"native_session_id,omitempty"`
+	Permission     string                `json:"permission_mode"`
+	State          string                `json:"state"`
+	Policy         string                `json:"policy"`
+	Online         bool                  `json:"online"`
+	AllowBypass    bool                  `json:"allow_bypass"`
+	BindingError   string                `json:"binding_error,omitempty"`
+	Capabilities   *deliveryCapabilities `json:"delivery_capabilities,omitempty"`
+	DeliveryMode   string                `json:"delivery_mode,omitempty"`
+	Connectivity   agentCapabilities     `json:"capabilities"`
 }
 type Message struct {
+	Provenance    json.RawMessage  `json:"provenance,omitempty"`
+	Data          json.RawMessage  `json:"data,omitempty"`
 	HandoffID     string           `json:"handoff_id,omitempty"` // Offer-only, never stored in the mailbox.
 	ID            string           `json:"message_id"`
 	Sender        Agent            `json:"sender"`
@@ -60,6 +65,7 @@ type Message struct {
 	QueuedContext *deliveryContext `json:"queued_context,omitempty"`
 }
 type peer struct {
+	relayGuidance             bool
 	handoffID, handoffMessage string
 	Agent
 	hash         string
@@ -78,6 +84,7 @@ type serverConn struct {
 	agent           string
 	epoch           int64
 	lifecycleEvents bool
+	peerEvents      bool
 }
 
 func (c *serverConn) send(p packet) error {
@@ -126,7 +133,7 @@ func openBroker(dir string) (*broker, error) {
 	if e = db.QueryRow("PRAGMA user_version").Scan(&version); e != nil {
 		return fail(e)
 	}
-	if version > 3 {
+	if version > 4 {
 		return fail(errors.New("database version is newer than this AX binary"))
 	}
 	_, e = db.Exec(`BEGIN;
@@ -156,7 +163,7 @@ func openBroker(dir string) (*broker, error) {
 	if _, e = db.Exec(`BEGIN;
  CREATE TABLE IF NOT EXISTS notifications(id TEXT PRIMARY KEY,recipient TEXT NOT NULL REFERENCES agents(id),message TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,data TEXT NOT NULL,acknowledged INTEGER NOT NULL DEFAULT 0);
  CREATE INDEX IF NOT EXISTS pending_notifications ON notifications(recipient) WHERE acknowledged=0;
- PRAGMA user_version=3; COMMIT;`); e != nil {
+ PRAGMA user_version=4; COMMIT;`); e != nil {
 		return fail(e)
 	}
 	var mode string
@@ -343,7 +350,7 @@ func (b *broker) event(id, state string, epoch int64) error {
 	if _, e = tx.Exec("INSERT INTO events(message,state,at,epoch) VALUES(?,?,?,?)", id, state, at, epoch); e != nil {
 		return e
 	}
-	if e = failureNotice(tx, id, state, at); e != nil {
+	if e = senderNotice(tx, id, state, at); e != nil {
 		return e
 	}
 	return tx.Commit()
@@ -358,6 +365,7 @@ func (b *broker) disconnect(c *serverConn) {
 	p.conn = nil
 	p.Online = false
 	b.uncertain(p.ID, p.epoch)
+	b.peersChanged()
 }
 func (b *broker) uncertain(id string, epoch int64) {
 	_, _ = b.db.Exec(`BEGIN; INSERT INTO events(message,state,at,epoch) SELECT id,'delivery_uncertain',?,? FROM messages WHERE recipient=? AND state='handoff_started'; UPDATE messages SET state='delivery_uncertain' WHERE recipient=? AND state='handoff_started'; COMMIT;`, time.Now().UnixMilli(), epoch, id, id)
@@ -369,9 +377,22 @@ func (b *broker) auth(c *serverConn) (*peer, error) {
 	}
 	return p, nil
 }
-func (b *broker) request(c *serverConn, method string, params json.RawMessage) (any, error) {
+func (b *broker) request(c *serverConn, method string, params json.RawMessage) (result any, err error) {
+	// Compare snapshots only for opt-in observers; heartbeats do not emit hints.
+	if peerChangeMethod(method) {
+		before := b.peerSnapshots()
+		defer func() {
+			if err == nil && before != b.peerSnapshots() {
+				b.peersChanged()
+			}
+		}()
+	}
 	var a struct {
 		Session
+		Provenance      json.RawMessage       `json:"provenance"`
+		Data            json.RawMessage       `json:"data"`
+		PeerEvents      bool                  `json:"peer_events"`
+		AdapterVersion  string                `json:"adapter_version"`
 		HandoffID       string                `json:"handoff_id"`
 		ThreadFilter    string                `json:"thread_id"`
 		StateFilter     string                `json:"delivery_state"`
@@ -397,7 +418,7 @@ func (b *broker) request(c *serverConn, method string, params json.RawMessage) (
 		return nil, errors.New("invalid parameters")
 	}
 	if method == "ax.ping" {
-		return object{"version": "1", "local_attach": true}, nil
+		return object{"version": "1", "local_attach": true, "relay": true}, nil
 	}
 	if method == "ax.enroll" {
 		s := a.Session
@@ -406,7 +427,10 @@ func (b *broker) request(c *serverConn, method string, params json.RawMessage) (
 		if !validName.MatchString(s.Name) || harnesses[s.Host].nativeID == nil || !validID.MatchString(s.ID) || len(s.Secret) < 32 || len(s.Mesh) != 24 {
 			return nil, errors.New("invalid session registration")
 		}
-		if s.Host == "external" && (s.DeliveryMode != "manual" && s.DeliveryMode != "adapter") || s.Host != "external" && s.DeliveryMode != "" {
+		if (s.Kind != "" && (s.Kind != "relay" || s.Host != "external")) || !validExternal(s.External) {
+			return nil, errors.New("invalid endpoint kind or external policy")
+		}
+		if s.Host == "external" && (s.DeliveryMode != "manual" && s.DeliveryMode != "adapter" && s.DeliveryMode != "mcp") || s.Host != "external" && s.DeliveryMode != "" {
 			return nil, errors.New("invalid delivery mode")
 		}
 		p := b.peers[s.ID]
@@ -424,7 +448,7 @@ func (b *broker) request(c *serverConn, method string, params json.RawMessage) (
 			if subtle.ConstantTimeCompare([]byte(p.hash), []byte(digest(s.Secret))) != 1 {
 				return nil, errors.New("invalid session credential")
 			}
-			if p.Name != s.Name || p.Host != s.Host {
+			if p.Name != s.Name || p.Host != s.Host || p.Kind != s.Kind {
 				return nil, errors.New("saved identity belongs to another name or harness")
 			}
 			p.State = "starting"
@@ -433,6 +457,7 @@ func (b *broker) request(c *serverConn, method string, params json.RawMessage) (
 			p.AllowBypass = s.AllowBypass
 			p.Mesh = s.Mesh
 			p.DeliveryMode = s.DeliveryMode
+			p.Kind, p.External, p.NotifyTerminal = s.Kind, s.External, s.Kind == "relay"
 			if e := b.save(p); e != nil {
 				return nil, e
 			}
@@ -447,7 +472,7 @@ func (b *broker) request(c *serverConn, method string, params json.RawMessage) (
 		if names != 0 {
 			return nil, errors.New("name already in use; resume its saved AX identity")
 		}
-		p = &peer{Agent: Agent{ID: s.ID, Name: s.Name, Host: s.Host, Mesh: s.Mesh, Native: s.Native, State: "starting", Permission: "unknown", Policy: "accept", AllowBypass: s.AllowBypass, DeliveryMode: s.DeliveryMode}, hash: digest(s.Secret)}
+		p = &peer{Agent: Agent{ID: s.ID, Name: s.Name, Host: s.Host, Mesh: s.Mesh, Native: s.Native, State: "starting", Permission: "unknown", Policy: "accept", AllowBypass: s.AllowBypass, DeliveryMode: s.DeliveryMode, Kind: s.Kind, External: s.External, NotifyTerminal: s.Kind == "relay"}, hash: digest(s.Secret)}
 		if e := b.save(p); e != nil {
 			return nil, e
 		}
@@ -468,6 +493,14 @@ func (b *broker) request(c *serverConn, method string, params json.RawMessage) (
 		}
 		if err := validateCapabilities(p.Host, a.Capabilities); err != nil {
 			return nil, err
+		}
+		version := a.AdapterVersion
+		if a.Capabilities != nil {
+			version = a.Capabilities.AdapterVersion
+		}
+		supportsRelay := relayVersion(version)
+		if externalPolicy(p.Agent) != "refuse" && !supportsRelay {
+			return nil, errors.New("bridge lacks external guidance; finish the AX update and relaunch this session")
 		}
 		// Duplicate MCP processes must not fence and reconnect each other forever.
 		// Preserve the live owner; a disconnected or expired lease can be replaced.
@@ -497,6 +530,8 @@ func (b *broker) request(c *serverConn, method string, params json.RawMessage) (
 		c.agent = p.ID
 		c.epoch = p.epoch
 		c.lifecycleEvents = a.LifecycleEvents
+		c.peerEvents = a.PeerEvents
+		p.relayGuidance = supportsRelay
 		p.capabilities = a.Capabilities
 		p.handoffID, p.handoffMessage = "", ""
 		return object{"agent_id": p.ID, "lease_epoch": p.epoch, "delivery_capabilities": p.capabilities}, nil
@@ -584,6 +619,22 @@ func (b *broker) request(c *serverConn, method string, params json.RawMessage) (
 		p.Policy = a.Policy
 		return p.Agent, b.save(p)
 	}
+	if c.agent == "" && method == "ax.external" {
+		p, e := b.resolve(a.Target)
+		if e != nil {
+			return nil, e
+		}
+		if a.External == "" || !validExternal(a.External) {
+			return nil, errors.New("external must be refuse, verified, or all")
+		}
+		before := p.Agent
+		p.External = a.External
+		if e = b.save(p); e != nil {
+			p.Agent = before
+			return nil, e
+		}
+		return p.Agent, nil
+	}
 	p, e := b.auth(c)
 	if e != nil {
 		return nil, e
@@ -662,11 +713,19 @@ func (b *broker) request(c *serverConn, method string, params json.RawMessage) (
 		if err != nil {
 			return nil, err
 		}
-		return b.send(p, a.Target, a.MessageID, a.Text, a.ClientID, int(ttl), method)
+		return b.send(p, a.Target, a.MessageID, a.Text, a.ClientID, int(ttl), method, a.Provenance, a.Data)
 	case "ax.get_message", "ax.ack", "ax.receipt", "ax.status":
 		m, e := b.message(a.MessageID)
 		if e != nil {
 			return nil, e
+		}
+		if m.Recipient == p.ID && len(m.Provenance) > 0 && (method == "ax.get_message" || method == "ax.status") {
+			if !p.relayGuidance {
+				return nil, errors.New("bridge lacks external guidance; finish the AX update and relaunch this session")
+			}
+			if !externalHandoff(p, m) {
+				return nil, errors.New("external message is held by recipient policy; the owner can inspect it with ax status")
+			}
 		}
 		if method == "ax.status" {
 			if m.Sender.ID != p.ID && m.Recipient != p.ID {
@@ -815,12 +874,21 @@ func safe(p *peer) bool {
 		return true
 	}
 	switch p.Permission {
+	case "relay":
+		return p.Kind == "relay"
 	case "default", "acceptEdits", "plan", "auto", "dontAsk", "read-only", "workspace-write":
 		return true
 	}
 	return false
 }
-func (b *broker) send(p *peer, target, parent, text, key string, ttl int, method string) (any, error) {
+func (b *broker) send(p *peer, target, parent, text, key string, ttl int, method string, structured ...json.RawMessage) (any, error) {
+	var provenance, data json.RawMessage
+	if len(structured) > 0 {
+		provenance = structured[0]
+	}
+	if len(structured) > 1 {
+		data = structured[1]
+	}
 	reply, resend, followup := method == "ax.reply", method == "ax.resend", method == "ax.follow_up"
 	if !validID.MatchString(key) || (!resend && (!utf8.ValidString(text) || len(text) == 0 || len(text) > maxText)) {
 		return nil, errors.New("provide client_message_id and 1 to 65536 bytes of UTF-8 text")
@@ -831,11 +899,24 @@ func (b *broker) send(p *peer, target, parent, text, key string, ttl int, method
 	if ttl < 1 || ttl > maxTTL {
 		return nil, fmt.Errorf("TTL must be between 1 and %d seconds", maxTTL)
 	}
-	hash := digest(string(raw([]any{target, parent, text, ttl, reply})))
+	if !resend {
+		if err := validateRelayContent(p, provenance, data); err != nil {
+			return nil, err
+		}
+	}
+	hashInputs := []any{target, parent, text, ttl, reply}
+	if len(provenance) > 0 || len(data) > 0 {
+		hashInputs = append(hashInputs, provenance, data)
+	}
+	hash := digest(string(raw(hashInputs)))
 	if resend {
 		hash = digest(string(raw([]any{method, parent, ttl})))
 	} else if followup {
-		hash = digest(string(raw([]any{method, parent, text, ttl})))
+		hashInputs = []any{method, parent, text, ttl}
+		if len(provenance) > 0 || len(data) > 0 {
+			hashInputs = append(hashInputs, provenance, data)
+		}
+		hash = digest(string(raw(hashInputs)))
 	}
 	var existing, prior string
 	e := b.db.QueryRow("SELECT id,request_hash FROM messages WHERE sender=? AND client_id=?", p.ID, key).Scan(&existing, &prior)
@@ -871,6 +952,10 @@ func (b *broker) send(p *peer, target, parent, text, key string, ttl int, method
 			return nil, e
 		}
 		text, parent, depth, resendOf = m.Text, m.Parent, m.Depth, m.ID
+		provenance, data = m.Provenance, m.Data
+		if err := validateRelayContent(p, provenance, data); err != nil {
+			return nil, err
+		}
 		thread, e = b.threadRoot(m)
 		if e != nil {
 			return nil, e
@@ -923,6 +1008,11 @@ func (b *broker) send(p *peer, target, parent, text, key string, ttl int, method
 	if to.Policy == "refuse" {
 		return nil, errors.New("recipient refuses messages")
 	}
+	if len(provenance) > 0 {
+		if ok, reason := admitsExternal(to, provenance); !ok {
+			return nil, &rpcError{Code: externalPolicyCode, Message: fmt.Sprintf("external policy %s: %s", externalPolicy(to.Agent), reason), Data: object{"target": to.ID, "external": externalPolicy(to.Agent), "reason": reason}}
+		}
+	}
 	var count, size int64
 	if e = b.db.QueryRow("SELECT count(*),coalesce(sum(length(data)),0) FROM messages WHERE state NOT IN ('acknowledged','expired','refused','abandoned')").Scan(&count, &size); e != nil {
 		return nil, e
@@ -956,7 +1046,7 @@ func (b *broker) send(p *peer, target, parent, text, key string, ttl int, method
 	if thread == "" {
 		thread = id
 	}
-	m := Message{ID: id, Thread: thread, Sender: p.Agent, Recipient: to.ID, Text: text, Parent: parent, ResendOf: resendOf, Seq: seq, Created: now.UnixMilli(), Expires: now.Add(time.Duration(ttl) * time.Second).UnixMilli(), Depth: depth, State: "queued"}
+	m := Message{ID: id, Thread: thread, Sender: p.Agent, Recipient: to.ID, Text: text, Provenance: provenance, Data: data, Parent: parent, ResendOf: resendOf, Seq: seq, Created: now.UnixMilli(), Expires: now.Add(time.Duration(ttl) * time.Second).UnixMilli(), Depth: depth, State: "queued"}
 	m.QueuedContext = &deliveryContext{BrokerVersion: Version, RecipientHost: to.Host, RecipientState: agentSnapshot(to).State, SenderState: agentSnapshot(p).State}
 	if _, e = tx.Exec("INSERT INTO messages VALUES(?,?,?,?,?,?,?,?,?,?)", m.ID, p.ID, to.ID, key, hash, seq, m.State, string(raw(m)), m.Created, m.Expires); e != nil {
 		return nil, e
@@ -994,6 +1084,7 @@ func (b *broker) dispatch() {
 			p.conn.Close()
 			p.conn = nil
 			p.Online = false
+			b.peersChanged()
 			b.uncertain(p.ID, p.epoch)
 		}
 		b.dispatchNotice(p, now)
@@ -1021,6 +1112,9 @@ func (b *broker) dispatch() {
 			}
 			m, e := b.message(id)
 			if e != nil {
+				break
+			}
+			if !externalHandoff(p, m) {
 				break
 			}
 			sender, e := b.messagePeer(b.db, m.Sender.ID)

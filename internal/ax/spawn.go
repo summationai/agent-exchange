@@ -118,7 +118,7 @@ func normalizeSpawn(req spawnRequest, parent Session) (spawnRequest, error) {
 	}
 	name, native, err := launchArgs(append([]string{"--name", req.Name}, req.Args...))
 	if err != nil || name != req.Name || !reflect.DeepEqual(native, req.Args) && !(len(native) == 0 && len(req.Args) == 0) {
-		return req, errors.New("set the AX name through name, not native arguments")
+		return req, errors.New("set the AX name through name; external policy is owner-only, not a native spawn argument")
 	}
 	if len(req.Args) == 0 {
 		req.Args = nil
@@ -374,6 +374,9 @@ func spawnCLI(ctx context.Context, dir string, args []string) (spawnResult, erro
 		// validation, so reject it here instead of forwarding a half-parsed option.
 		if args[i] == "-cwd" || strings.HasPrefix(args[i], "-cwd=") {
 			return spawnResult{}, errors.New("-cwd is no longer the AX cwd option; use --cwd /absolute/path")
+		}
+		if args[i] == "--external" || strings.HasPrefix(args[i], "--external=") {
+			return spawnResult{}, errors.New("--external is not supported by ax spawn; set the owner policy with ax external NAME POLICY after launch")
 		}
 		if args[i] == "--cwd" {
 			i++

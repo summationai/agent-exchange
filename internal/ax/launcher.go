@@ -193,7 +193,7 @@ func launch(ctx context.Context, dir, host string, args []string, spawnToken str
 		s.ClaudePending = ""
 	}
 	s.External = external
-	s.AllowBypass = bypass || os.Getenv("AX_ALLOW_BYPASS") == "1"
+	s.AllowBypass = bypassOptIn(s.AllowBypass, bypass)
 	if e = saveSession(path, s); e != nil {
 		return e
 	}

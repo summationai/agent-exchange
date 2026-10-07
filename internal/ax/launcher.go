@@ -167,7 +167,7 @@ func launch(ctx context.Context, dir, host string, args []string, spawnToken str
 	if s.ClaudePending != "" && !missingClaudeTranscript(s.ClaudePending) {
 		s.ClaudePending = ""
 	}
-	s.AllowBypass = bypass || os.Getenv("AX_ALLOW_BYPASS") == "1"
+	s.AllowBypass = bypassOptIn(s.AllowBypass, bypass)
 	if e = saveSession(path, s); e != nil {
 		return e
 	}

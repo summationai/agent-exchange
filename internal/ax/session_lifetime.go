@@ -68,7 +68,11 @@ func (b *broker) reapSessions(now time.Time) {
 		return
 	}
 	b.lastReap = now
+	b.reapNetworkPeers(now)
 	for _, p := range b.peers {
+		if p.Remote != nil {
+			continue
+		}
 		b.reapSession(p, now)
 	}
 }

@@ -28,7 +28,7 @@ func (b *broker) deliverySnapshot(m Message) (deliverySnapshot, error) {
 	if err != nil {
 		return s, err
 	}
-	s.Reason = messageQueueReason(to, from, m)
+	s.Reason = b.messageQueueReason(to, from, m)
 	if pause := resourcePause(b.dir, time.Now()); pause != nil {
 		s.Reason = pause.Error()
 	}

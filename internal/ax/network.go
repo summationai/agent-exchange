@@ -46,10 +46,12 @@ type networkIdentity struct {
 	Key  []byte      `json:"private_key"`
 }
 type networkPeer struct {
-	Card    networkCard `json:"card"`
-	Exports []string    `json:"exports"`
+	Card      networkCard `json:"card"`
+	Exports   []string    `json:"exports"`
+	Messaging bool        `json:"messaging,omitempty"`
 }
 type networkAgent struct {
+	ID    string `json:"agent_id"`
 	Name  string `json:"name"`
 	Host  string `json:"host"`
 	State string `json:"state"`
@@ -233,7 +235,7 @@ func trustNetworkPeer(dir, alias string, card networkCard, exports []string) err
 	if _, exists := peers[alias]; !exists && len(peers) >= 32 {
 		return errors.New("AX network peer limit reached")
 	}
-	peers[alias] = networkPeer{Card: card, Exports: exports}
+	peers[alias] = networkPeer{Card: card, Exports: exports, Messaging: peers[alias].Messaging}
 	if len(raw(peers)) > networkConfigLimit {
 		return errors.New("AX network configuration exceeds its size limit")
 	}
@@ -254,6 +256,25 @@ func revokeNetworkPeer(dir, alias string) error {
 		return errors.New("AX network peer is not paired")
 	}
 	delete(peers, alias)
+	return savePrivateJSON(filepath.Join(dir, "network", "peers.json"), peers)
+}
+
+func setNetworkMessaging(dir, alias string, enabled bool) error {
+	lock, err := lockFile(filepath.Join(dir, "network", "config.lock"))
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	peers, err := networkPeers(dir)
+	if err != nil {
+		return err
+	}
+	peer, exists := peers[alias]
+	if !exists {
+		return errors.New("AX network peer is not paired")
+	}
+	peer.Messaging = enabled
+	peers[alias] = peer
 	return savePrivateJSON(filepath.Join(dir, "network", "peers.json"), peers)
 }
 
@@ -306,8 +327,8 @@ func networkHandler(dir string, identity networkCard) http.Handler {
 		}
 		out := networkDiscovery{Protocol: networkProtocol, Machine: identity.Name, Agents: []networkAgent{}}
 		for _, agent := range agents {
-			if slices.Contains(peer.Exports, "*") || slices.Contains(peer.Exports, agent.Name) {
-				out.Agents = append(out.Agents, networkAgent{Name: agent.Name, Host: agent.Host, State: agent.State})
+			if agent.Remote == nil && (slices.Contains(peer.Exports, "*") || slices.Contains(peer.Exports, agent.Name)) {
+				out.Agents = append(out.Agents, networkAgent{ID: agent.ID, Name: agent.Name, Host: agent.Host, State: agent.State})
 			}
 		}
 		w.Header().Set("Content-Type", "application/json")

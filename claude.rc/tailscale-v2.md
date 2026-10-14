@@ -19,7 +19,7 @@ Codex  ─ MCP ─ local broker ─ network adapter
 
 ## Decisions
 
-Use the installed Tailscale service, rather than embedding a second Tailscale node in AX. The initial adapter uses the installed CLI once at initialization and once at listener startup to obtain the local addresses. It neither logs in nor modifies the tailnet, ACLs, Serve, or Funnel. There is no Tailscale dependency in local-only operation and no new Go dependency for the foundation.
+Use the installed Tailscale service, rather than embedding a second Tailscale node in AX. The adapter uses the installed CLI once at initialization and once at listener startup to obtain the local addresses. It neither logs in nor modifies the tailnet, ACLs, Serve, or Funnel. There is no Tailscale dependency in local-only operation and no new Go dependency for the foundation.
 
 Bind only to an address reported by the running local Tailscale service. Never bind a wildcard, LAN, or public address. Tailscale controls connectivity; mutually authenticated TLS and explicit AX pairing control application access. Per-installation certificates distinguish OS users even when they share a Tailscale device. Public pairing cards contain no session credentials or private keys. Exchange cards through an independently trusted channel and verify fingerprints before trusting them.
 
@@ -27,7 +27,7 @@ Each peer has a local alias and an explicit allowlist of agent names it can disc
 
 ## First milestone: implemented foundation
 
-These development commands establish identity, explicit trust, scoped discovery, and revocation. They do not yet route messages or change the harness-facing MCP tools.
+These development commands establish identity, explicit trust, scoped discovery, and revocation. Pairing starts with discovery only. Enable messaging separately on both machines to use the existing MCP tools across the connection.
 
 ```sh
 # Laptop, choose the installation's name and save its public card.
@@ -41,6 +41,10 @@ ax network trust buildbox buildbox.json api
 
 # On the build machine, permit the laptop to discover reviewer:
 ax network trust laptop laptop.json reviewer
+
+# Enable messaging on the laptop, and separately on the build machine:
+ax network messaging buildbox on
+ax network messaging laptop on
 
 # Keep the network adapter running on each machine.
 ax network serve
@@ -56,11 +60,11 @@ The names after a trust command are local agents that the named remote installat
 
 The private network state lives under `AX_HOME/network`. Identity keys and pairing policy use the existing private file, ownership, locking, and atomic-write helpers. Losing this directory requires pairing again. Initialization is idempotent and never silently regenerates a key. Certificates expire after one year; the foundation reports an expired identity rather than rotating it behind a peer's back. Certificate renewal with the same installation identity is follow-up work before general release.
 
-Only authenticated `GET /ax/network/v1/agents` is exposed. It returns a protocol version, machine alias, and a bounded list of exported AX agent IDs, names, harness types, and current state. It excludes native session IDs, workspaces, permission settings, credentials, messages, and transcripts. There is no socket proxy, remote broker administration, shell, spawn, kill, or recovery API. Unsupported methods and routes fail closed.
+The authenticated `GET /ax/network/v1/agents` discovery endpoint returns a protocol version, machine alias, and a bounded list of exported AX agent IDs, names, harness types, and current state. It excludes native session IDs, workspaces, permission settings, credentials, messages, and transcripts. There is no socket proxy, remote broker administration, shell, spawn, kill, or recovery API. Unsupported methods and routes fail closed.
 
 ## Message routing milestone
 
-The broker checkpoint implements private adapter operations for remote discovery snapshots, a durable outbox, destination import, and destination acceptance. It is not a TCP message API. The A2A binding and network workers remain to be connected before agents can send across machines.
+The broker checkpoint implements private adapter operations for remote discovery snapshots, a durable outbox, destination import, and destination acceptance. The optional network adapter now connects these operations through the official A2A Go SDK, pinned to version 2.0.0, and one worker per paired machine. It does not expose the local socket as a TCP API.
 
 `ax network messaging ALIAS on` explicitly grants messaging to a paired installation; `off` holds later outbound transfers and incoming native handoffs. Both sides must opt in. Incoming scope uses the same explicit local-agent export list as discovery. Pairing and AX updates alone never grant messaging. Remote identities are qualified by the local peer alias. External provenance remains intact, and the receiving agent's external policy still applies.
 
@@ -70,25 +74,25 @@ Keep the existing MCP tool names. Discovery merges explicitly permitted remote a
 
 The source broker commits outgoing work before attempting transmission. The destination commits the incoming message and deduplication record together before acknowledging network acceptance. The stable key includes authenticated source installation, source agent ID, and client message ID. A retry with different content is rejected. Local and remote message IDs are mapped durably, so replies and follow-up threads survive restart. Remote claims cannot impersonate a local agent or modify permission and provenance fields.
 
-Preserve native sandbox and approval controls. An explicit future messaging grant authorizes delegation to specific recipients; discovery grants do not. Unpaired, revoked, out-of-scope, and ambiguous requests are rejected before content enters a native session. Existing external-relay provenance remains tainted when crossing machines. A trusted machine must not launder an external message into an authorized peer task.
+Preserve native sandbox and approval controls. An explicit messaging grant authorizes delegation to specific recipients; discovery grants do not. Unpaired, revoked, out-of-scope, and ambiguous requests are rejected before content enters a native session. Existing external-relay provenance remains tainted when crossing machines. A trusted machine must not launder an external message into an authorized peer task.
 
-Source outbox states add `remote_queued` and `remote_accepted`. Destination harness receipt remains separate from network acceptance, model acknowledgment, and task completion. If network acceptance is lost, retry the same idempotency key. If a native handoff is uncertain, preserve the uncertainty and never automatically execute the task again. A disconnected peer remains explicitly offline; cached discovery is not evidence of reachability.
+Source outbox work stays `queued` until the destination commits it, then becomes `remote_accepted`. Destination harness receipt remains separate from network acceptance, model acknowledgment, and task completion. If network acceptance is lost, retry the same idempotency key. If a native handoff is uncertain, preserve the uncertainty and never automatically execute the task again. A disconnected peer remains explicitly offline; cached discovery is not evidence of reachability.
 
 ## A2A boundary
 
-Target A2A 1.0, JSON-RPC binding, declared `protocolVersion: "1.0"`. Keep the local AX socket protocol private. The discovery-only foundation is a small AX protocol and advertises no A2A endpoint or compliance. Do not expose an Agent Card promising methods before those methods work.
+The development binding uses A2A 1.0 JSON-RPC and declares `protocolVersion: "1.0"`. Scoped Agent Cards are available at `/ax/network/v1/a2a/AGENT_ID/agent-card.json`, with their JSON-RPC endpoint at the same path without the card suffix. Cards declare pinned mutual TLS and a required `https://useax.dev/extensions/named-mailbox/v1` extension. The AX discovery route remains a small AX protocol.
 
-The routing milestone must implement authenticated Agent Cards, SendMessage, GetTask, ListTasks, and CancelTask against the named version. Initial cards declare streaming and push notifications unsupported; unsupported optional operations return their standard errors. Standard task state is distinct from AX delivery evidence. A durable queued request maps to submitted; actual execution can map to working. Receipt, channel write, and model acknowledgment must never map to completed. Completion requires an explicit task outcome, and cancellation must not claim to terminate native work that the harness cannot cancel. AX receipt metadata belongs in a declared extension with stable installation and message IDs.
+The binding implements authenticated Agent Cards, SendMessage, GetTask, ListTasks, and CancelTask. Initial cards declare streaming and push notifications unsupported; unsupported optional operations return their standard errors. Standard task state is distinct from AX delivery evidence. A durable queued request maps to submitted; actual execution can map to working. Receipt, channel write, and model acknowledgment must never map to completed. The recipient reports an explicit outcome through the MCP tool `report_task`, using working, input_required, completed, or failed. Completion requires this explicit report, and cancellation must not claim to terminate native work that the harness cannot cancel. AX receipt metadata belongs in a declared extension with stable installation and message IDs. The required named-mailbox extension carries the source AX agent identity, source message ID, recipient, absolute expiration, optional parent mapping, provenance, and structured AX data in message metadata keyed by its URI. The A2A text part is the only wire copy of the text; the metadata envelope uses an empty text field. Clients activate the extension in both the A2A-Extensions header and the message extensions list. The mutual TLS certificate, never metadata, establishes the installation identity.
 
-Validate normative fields, task ownership, message roles and parts, version headers, idempotency, errors, and authorization with an independent A2A client before claiming interoperability. An AX-to-AX test alone is insufficient. The protocol implementation and its task-outcome contract will receive their own review before message delivery is enabled.
+Validate normative fields, task ownership, message roles and parts, version headers, idempotency, errors, and authorization with an independent A2A client before claiming interoperability. An AX-to-AX test alone is insufficient. An independently constructed official SDK client exercises the advertised Agent Card and task methods in tests. This is an experimental A2A binding, not a full conformance claim. Task/context continuation fields and ListTasks filters are explicitly rejected in this checkpoint; AX thread continuation uses the declared mailbox extension. Streaming, push, file content, and artifacts are unsupported.
 
 ## Resource and failure budgets
 
-Foundation limits: 32 trusted peers, 64 exported names per peer, 16 accepted connections, 8 KiB HTTP headers, 256 KiB configuration, 5-second read/write deadlines, and 10-second idle keepalive. The existing one-core Go runtime and shared AX CPU guard also apply to the network adapter. Discovery has no background refresh loop, model calls, reconnect loop, or persistent outbound connection. Closing the adapter never closes a harness or the local broker.
+Foundation limits: 32 trusted peers, 64 exported names per peer, 16 accepted connections, 8 KiB HTTP headers, 256 KiB configuration, 5-second read/write deadlines, and 10-second idle keepalive. The existing one-core Go runtime and shared AX CPU guard also apply to the network adapter. Discovery-only pairing has no outbound worker. Messaging workers refresh discovery every 30 seconds, read pairing changes every 5 seconds, and use a coalesced private broker event to wake immediately for new outgoing work. No model polling is involved. Closing the adapter never closes a harness or the local broker.
 
 The broker checkpoint caches at most 64 remote identities and reserves at least 64 of the existing endpoint slots for local agents. It archives revoked or idle remote entries after one minute without deleting their durable identities, mail, or retry keys. Agent discovery reads and verifies each paired installation once per list rather than once per remote agent.
 
-Before routing ships: one worker per paired peer, one active outbound request per peer, 1-second initial backoff growing to 60 seconds with jitter, deadlines and TTL checked before every retry, and a bounded durable outbox. Wake workers on new messages and connectivity hints, not tight polling. Resolve and bound the retry, queue, and storage budgets in the routing PR. Measure idle CPU, reconnect CPU, RSS, and file descriptors under peer outage and suspend/resume.
+Each permitted peer has one worker and one active HTTP request. Outages start at 1 second of backoff, double to 60 seconds, and add up to 25 percent jitter. New-message hints cannot defeat that backoff. HTTP calls have a 5-second deadline; a drain cycle has a 15-second deadline and a batch of at most 16 messages. Requests and SDK response bodies are bounded by the existing frame limit. A rejected recipient is excluded from the remainder of its bounded drain batch, so it cannot block unrelated recipients; its original request remains queued for later retry or expiry. The existing per-recipient and global mailbox quotas apply. A private process lock and single broker event subscriber prevent duplicate adapter workers. Measure idle CPU, reconnect CPU, RSS, and file descriptors under peer outage and suspend/resume before release.
 
 ## Verification and rollout
 

@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -308,7 +309,7 @@ func networkHandler(dir string, identity networkCard) http.Handler {
 			http.Error(w, "peer is not authorized", http.StatusForbidden)
 			return
 		}
-		if r.Method != http.MethodGet || r.URL.Path != networkAgentsPath || r.URL.RawQuery != "" || r.ContentLength != 0 {
+		if r.URL.RawQuery != "" || (r.URL.Path != networkAgentsPath && !strings.HasPrefix(r.URL.Path, networkA2APath)) {
 			http.Error(w, "unsupported network operation", http.StatusNotFound)
 			return
 		}
@@ -323,6 +324,13 @@ func networkHandler(dir string, identity networkCard) http.Handler {
 		var agents []Agent
 		if err = c.callContext(ctx, "ax.inspect", object{}, &agents); err != nil {
 			http.Error(w, "local broker unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if networkA2AEndpoint(w, r.WithContext(ctx), dir, identity, peer, agents) {
+			return
+		}
+		if r.Method != http.MethodGet || r.ContentLength != 0 {
+			http.Error(w, "unsupported operation", http.StatusNotFound)
 			return
 		}
 		out := networkDiscovery{Protocol: networkProtocol, Machine: identity.Name, Agents: []networkAgent{}}

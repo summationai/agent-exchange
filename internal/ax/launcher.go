@@ -503,7 +503,7 @@ Ask either agent to message another by name.
   ax resolve MESSAGE_ID abandon Release a stuck message without redelivery
   ax policy NAME hold           Pause incoming mail (accept/hold/refuse)
   ax doctor                     Diagnose harnesses, Channels, and local discovery
-  ax network                    Set up paired Tailscale discovery (development)
+  ax network                    Connect paired Tailscale machines (development)
   ax external NAME POLICY       Set external policy: refuse, verified, all
   ax version                    Show the AX version`)
 		return nil

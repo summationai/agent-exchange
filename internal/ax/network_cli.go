@@ -120,7 +120,19 @@ func networkCLI(ctx context.Context, dir string, args []string, in io.Reader, ou
 			return err
 		}
 		defer listener.Close()
-		return serveNetwork(ctx, dir, listener, identity, cert)
+		lock, err := networkRunLock(dir)
+		if err != nil {
+			return err
+		}
+		defer lock.Close()
+		child, cancel := context.WithCancel(ctx)
+		defer cancel()
+		done := make(chan struct{})
+		go func() { defer close(done); runNetworkWorkers(child, dir, cert) }()
+		err = serveNetwork(child, dir, listener, identity, cert)
+		cancel()
+		<-done
+		return err
 	default:
 		return usage
 	}

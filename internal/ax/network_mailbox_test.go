@@ -251,3 +251,48 @@ func TestNetworkCacheReservesLocalSlotsAndRetainsHistory(t *testing.T) {
 		t.Fatal("rehydration replaced durable identity")
 	}
 }
+
+func TestNetworkRevocationWithholdsOfferedHistory(t *testing.T) {
+	for _, change := range []string{"disable", "revoke", "scope"} {
+		t.Run(change, func(t *testing.T) {
+			a, b := pairedNetworkBrokers(t)
+			web, _, _ := endpoint(t, a, "web", testMesh)
+			api, conn, _ := endpoint(t, b, "api", testMesh)
+			m, err := b.networkReceive("laptop", networkEnvelope{ID: "offered", SenderID: web.ID, SenderName: web.Name, SenderHost: web.Host, Recipient: api.ID, Text: "private task", Data: json.RawMessage(`{"private":true}`), Expires: time.Now().Add(time.Minute).UnixMilli()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = b.event(m.ID, "channel_written", 0); err != nil {
+				t.Fatal(err)
+			}
+			switch change {
+			case "disable":
+				err = setNetworkMessaging(b.dir, "laptop", false)
+			case "revoke":
+				err = revokeNetworkPeer(b.dir, "laptop")
+			case "scope":
+				peers, e := networkPeers(b.dir)
+				if e != nil {
+					t.Fatal(e)
+				}
+				err = trustNetworkPeer(b.dir, "laptop", peers["laptop"].Card, nil)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			thread, err := b.thread(b.peers[api.ID], m.ID, "")
+			if err != nil || len(thread.Messages) != 1 || !thread.Messages[0].Withheld || thread.Messages[0].Text != "" || len(thread.Messages[0].Data) != 0 || len(thread.Messages[0].Provenance) != 0 {
+				t.Fatalf("revoked thread exposed content: %+v %v", thread, err)
+			}
+			pending, err := b.pending(b.peers[api.ID], 0)
+			if err != nil || len(pending.Messages) != 1 || pending.Messages[0].Preview != "" {
+				t.Fatalf("revoked preview exposed content: %+v %v", pending, err)
+			}
+			for _, method := range []string{"ax.get_message", "ax.status"} {
+				if _, err = b.request(conn, method, raw(object{"message_id": m.ID})); err == nil {
+					t.Fatalf("revoked content accessible through %s", method)
+				}
+			}
+		})
+	}
+}

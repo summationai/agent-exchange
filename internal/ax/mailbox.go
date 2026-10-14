@@ -238,7 +238,7 @@ func (b *broker) pending(p *peer, after int64) (pendingPage, error) {
 				return out, err
 			}
 		}
-		if state != "queued" && p.Policy == "accept" && safe(p) && sender != nil && safe(sender) && externalHandoff(p, m) {
+		if state != "queued" && p.Policy == "accept" && safe(p) && sender != nil && safe(sender) && externalHandoff(p, m) && b.networkHandoffAllowed(m, p) {
 			preview := []rune(m.Text)
 			item.Preview = string(preview[:min(len(preview), 100)])
 		}

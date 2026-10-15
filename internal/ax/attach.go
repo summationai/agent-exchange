@@ -178,7 +178,7 @@ func attachedSessionOptions(dir, name, native, mode, socket, kind, external stri
 	s.DeliveryMode, s.AdapterSocket = mode, socket
 	s.External = external
 	s.Started, s.BindingError = true, ""
-	s.AllowBypass = os.Getenv("AX_ALLOW_BYPASS") == "1"
+	s.AllowBypass = bypassOptIn(s.AllowBypass, false)
 	if err = saveSession(file, s); err != nil {
 		return s, "", noop, err
 	}

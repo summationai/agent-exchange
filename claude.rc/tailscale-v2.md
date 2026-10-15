@@ -1,6 +1,6 @@
 # AX across a Tailscale network
 
-Status: implementation started, October 14, 2026. Tracks [issue 27](https://github.com/summationai/agent-exchange/issues/27).
+Status: optional messaging in AX 0.8.0. See [the setup guide](tailscale.md). Tracks [issue 27](https://github.com/summationai/agent-exchange/issues/27) for remaining platform and lifecycle verification.
 
 ## Experience
 
@@ -58,7 +58,7 @@ ax network revoke buildbox
 
 The names after a trust command are local agents that the named remote installation may discover. They are not remote targets. `ax network identity` prints the existing public card; `ax network trust ALIAS - AGENT` reads a card from stdin. Initialization defaults to port 48889; an optional final port supports multiple OS users on one machine. No production listener is enabled by installing or updating AX.
 
-The private network state lives under `AX_HOME/network`. Identity keys and pairing policy use the existing private file, ownership, locking, and atomic-write helpers. Losing this directory requires pairing again. Initialization is idempotent and never silently regenerates a key. Certificates expire after one year; the foundation reports an expired identity rather than rotating it behind a peer's back. Certificate renewal with the same installation identity is follow-up work before general release.
+The private network state lives under `AX_HOME/network`. Identity keys and pairing policy use the existing private file, ownership, locking, and atomic-write helpers. Losing this directory requires pairing again. Initialization is idempotent and never silently regenerates a key. Certificates expire after one year; an expired identity is rejected rather than silently replaced. AX 0.8.0 requires explicit re-pairing with a new identity to rotate a certificate; the setup guide describes that procedure. Automatic renewal is not included.
 
 The authenticated `GET /ax/network/v1/agents` discovery endpoint returns a protocol version, machine alias, and a bounded list of exported AX agent IDs, names, harness types, and current state. It excludes native session IDs, workspaces, permission settings, credentials, messages, and transcripts. There is no socket proxy, remote broker administration, shell, spawn, kill, or recovery API. Unsupported methods and routes fail closed.
 

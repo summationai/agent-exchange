@@ -30,3 +30,5 @@ a relay can assert provenance; the recipient owner's external policy defaults to
 refuse, and guidance follows provenance. Opaque structured data travels with the
 text. Attached hosts may receive messages, sender notices, and coalesced agent
 changes over their MCP pipe. See [the relay contract](relay.md).
+
+Optional Tailscale messaging connects explicitly paired AX installations through a separately stoppable network adapter. Each installation keeps its local broker, Unix socket, and SQLite mailbox. Public pairing cards pin mutual TLS certificates; a separate messaging grant and local-agent export list control access. Remote names include the peer alias, such as `reviewer@buildbox`. The network interface does not expose shell execution or the local broker's administrative methods. See [Tailscale setup and failure behavior](tailscale.md).

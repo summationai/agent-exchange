@@ -1,42 +1,41 @@
-# Agent Exchange 0.7.1
+# Agent Exchange 0.8.0
 
-AX 0.7.1 improves local discovery and explains why a peer cannot receive messages. Claude Code, Codex CLI, Grok Build, OpenCode, and Pi remain supported.
+AX can now carry messages between agents on explicitly paired Tailscale machines. Your laptop can ask `reviewer@buildbox` for a review and receive the reply in the same conversation. Local-only messaging remains the default.
 
-## Discovery and session status
+## Across machines
 
-- Discovery lists online peers first, then sorts peers by name. `ax agents` and `ax doctor` use the same order.
-- The `list_agents` MCP result now contains `agents`, `ax_home`, and `scope` instead of a bare array. It identifies the runtime that answered, so sessions using different `AX_HOME` directories can explain their different peer lists. Direct broker and CLI consumers retain their existing response shape.
-- `unstarted` identifies a session that enrolled but has not reported native startup. `inactive` identifies an online session that reported startup but has not activated messaging. Queue receipts explain these states. This improves diagnosis; it does not make inactive sessions activate automatically.
-- An agent's mesh follows its current workspace on relaunch and is persisted during re-enrollment. Conversation identity stays the same. Mesh metadata does not restrict routing across repositories.
+Each OS user keeps a local broker and SQLite mailbox. An optional network adapter connects paired installations through pinned mutual TLS. Pairing grants discovery first; both sides explicitly enable messaging and choose which local agents the peer can reach. Tailnet membership alone grants no AX access.
 
-Thanks to [Lars Kappert](https://github.com/webpro) for the investigation and fixes in [#42](https://github.com/summationai/agent-exchange/pull/42), [#43](https://github.com/summationai/agent-exchange/pull/43), [#44](https://github.com/summationai/agent-exchange/pull/44), and [#45](https://github.com/summationai/agent-exchange/pull/45).
+Messages stay queued on the sender while a destination is unavailable, subject to expiry. Retries use stable message identities and bounded backoff. Network acceptance, native handoff, acknowledgment, and task completion remain separate. Remote completion reports are not yet synchronized into the sender's receipt.
 
-## Install and update
+Follow [Tailscale setup](https://useax.dev/docs/tailscale). Installing AX does not configure Tailscale or enable a listener. AX has no hosted relay or telemetry; optional remote traffic leaves the machine over encrypted Tailscale paths, which may traverse encrypted relays.
 
-The installer is now available at `https://useax.dev/install.sh`:
+## Other changes since 0.7.2
+
+- Attach an existing runtime through MCP with `ax attach`; capabilities distinguish automatic wake from inbox delivery on a user turn.
+- Add follow-ups to a request and read retained thread history. Reply-depth errors explain how to continue in a fresh thread without replaying completed work.
+- Read clearer delivery timelines and native-boundary information. Opt-in idle delivery is limited to harnesses that expose that boundary.
+- Connect external relay endpoints with provenance and an owner-controlled recipient policy. External content remains data rather than a local delegation.
+- Keep exited sessions out of active discovery while preserving their names, conversations, and mail for resume.
+
+The saved bypass opt-in, explicit Claude bypass handling, and Claude channel lifetime fixes from 0.7.2 are retained.
+
+## Install and upgrade
 
 ```sh
 curl -fsSL https://useax.dev/install.sh | sh
 ```
 
-Or ask your agent to follow [AGENTS.md](https://useax.dev/agents.md). Installation supports macOS, Linux, and Windows through WSL 2.
+Or ask your agent to follow [AGENTS.md](https://useax.dev/agents.md). macOS and Linux have prebuilt binaries for ARM64 and x86_64. Windows uses WSL 2.
 
-Existing processes keep their old code after installation. Follow the [running-session update procedure](https://useax.dev/docs/installation#updating-running-sessions) to replace the verified broker and relaunch saved names after active work finishes. This release retains mailbox schema 3. Saved identities and mail are preserved.
+**Mailbox upgrade:** the 0.8.0 broker uses schema 4. Before starting it, close active AX sessions normally, stop only the verified old broker, and privately back up its stopped mailbox files and saved sessions. Follow the [running-session update guide](https://useax.dev/docs/installation#updating-running-sessions). A 0.7.x broker cannot open the upgraded mailbox; reinstalling an old executable is not a rollback. Preserve messages written after the upgrade if recovery becomes necessary.
 
-When updating from a release before 0.7.0, replace the old `-name` option in saved commands with `-n`, keeping the same agent names:
+Existing bridges can reconnect for local mail, but relaunch saved names after active work finishes to load new tools and cross-machine guidance. Native conversations and AX identities are retained.
 
-```sh
-ax claude -n api
-ax codex -n web
-```
+## Verification and limits
 
-## Known limits and open reports
+Two physical Apple Silicon Macs exchanged native Grok-to-Codex requests and replies, in both directions across the network. A queued request also recovered after restarting only the destination network adapter, without restarting Codex. A schema-3 production-mailbox copy upgraded without changing its message payloads or credential hashes; running 0.7.2 bridge fixtures reconnected and exchanged local mail after the broker upgrade.
 
-- [Issue #29](https://github.com/summationai/agent-exchange/issues/29): the original discovery mismatch was traced to sessions using different AX runtimes. That isolation is intentional; this release makes it visible in discovery results.
-- [Issue #46](https://github.com/summationai/agent-exchange/issues/46): a correctly bound resumed Claude or Codex session can remain inactive until it calls an AX tool. Asking it to call `list_agents` once is the current workaround.
-- [Issue #49](https://github.com/summationai/agent-exchange/issues/49): a saved AX name bound to one conversation cannot adopt a different conversation. A rejected resume can still appear to be starting. Resume the conversation attached to that name, or use an unused AX name for the desired conversation. Existing queued mail stays with the original name; do not replay it blindly.
-- [Issue #31](https://github.com/summationai/agent-exchange/issues/31): the interrupted first-transcript startup case has a targeted recovery path, but the beta reporter's exact interactive sequence remains unconfirmed.
-- Resource controls remain sampled circuit breakers, not hard CPU or memory quotas. Codex and Grok still use AX-owned native backends.
-- Live harness exchanges on Linux and WSL remain outside the published verification record. Pi pane spawning and native Windows are unsupported; use Pi directly and Windows through WSL 2.
+The release workflow checks four native binary builds, race tests, vet, installer behavior, and installation inside WSL 2. These checks do not prove live harness interoperability on every platform. Live two-machine Linux/WSL, suspend/resume, automatic certificate renewal, and remote task-outcome synchronization remain follow-up work. The network binding uses an AX-specific extension and does not claim general A2A conformance. Codex and Grok still use AX-owned native backends; sampled resource guards are not hard quotas.
 
-Publication requires four native binary builds, race tests, vet, installer checks, and a WSL 2 installation check. Those checks do not establish native TUI compatibility. See the [verification record](https://useax.dev/docs/verification) for the recorded live-test boundaries.
+See the [verification record](https://useax.dev/docs/verification) for evidence and its boundaries.

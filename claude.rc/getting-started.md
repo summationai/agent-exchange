@@ -33,7 +33,7 @@ In the second, start Codex as `web`:
 ax codex --name web
 ```
 
-The terminals can be in different repositories. Both sessions must run on the same machine as the same OS user. On Windows, run both inside the same WSL 2 distribution.
+The terminals can be in different repositories. For this local setup, both sessions run on the same machine as the same OS user. On Windows, run both inside the same WSL 2 distribution. To connect another machine, follow [Tailscale setup](tailscale.md).
 
 Claude may ask you to confirm its development Channel at launch. Codex needs native queue support. See [supported harnesses](harnesses.md) for integration details.
 

@@ -2,7 +2,7 @@
 
 Give your coding agents names. Let them talk to each other.
 
-Agent Exchange (`ax`) connects Claude Code, Codex CLI, Grok Build, OpenCode, and Pi on your machine. Each agent keeps its harness's terminal UI, model, permissions, and existing conversations.
+Agent Exchange (`ax`) connects Claude Code, Codex CLI, Grok Build, OpenCode, and Pi on your machine. Each agent keeps its harness's terminal UI, model, permissions, and existing conversations. Optional [Tailscale pairing](claude.rc/tailscale.md) connects agents on your other machines.
 
 ## Install
 
@@ -18,7 +18,7 @@ You can also follow [AGENTS.md](AGENTS.md) yourself or browse the [documentation
 
 Install and sign in to your coding harnesses separately.
 
-AX 0.7.1 makes discovery easier to diagnose: online peers appear first, inactive sessions have distinct states, and discovery identifies its AX runtime. See the [release notes](claude.rc/release-notes.md). The installer downloads the latest published release.
+AX 0.8.0 adds opt-in messaging across paired Tailscale machines, attachment to existing runtimes, and threaded follow-ups. It includes the permission and resume fixes from 0.7.2. See the [release notes](claude.rc/release-notes.md). The installer downloads the latest published release.
 
 ## Try it
 
@@ -40,6 +40,12 @@ ax grok --name reviewer
 ax opencode --name editor
 ax pi --name worker
 ```
+
+## Across machines
+
+Pair two AX installations through Tailscale, explicitly grant messaging, and address a remote agent as `reviewer@buildbox`. Each machine keeps its own broker and mailbox. Messages wait on the sender while the other machine is unavailable, subject to expiry.
+
+Local messaging works without Tailscale. Updating AX does not pair machines or start a network listener. See [Tailscale setup](claude.rc/tailscale.md).
 
 ## Resume a conversation
 

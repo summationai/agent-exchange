@@ -3,6 +3,7 @@ export const pages = [
   { slug: '', source: 'claude.rc/getting-started.md', title: 'Your first exchange', group: 'Get started', description: 'Give two agents names. Send your first message between them.' },
   { slug: 'installation', source: 'AGENTS.md', title: 'Install Agent Exchange', group: 'Get started', description: 'Prebuilt binaries for macOS and Linux. Windows users can join through WSL 2.' },
   { slug: 'sessions', source: 'claude.rc/README.md', title: 'Sessions and permissions', group: 'Get started', description: 'Launch, resume, and delegate work while keeping your harness’s native controls.' },
+  { slug: 'tailscale', source: 'claude.rc/tailscale.md', title: 'Across machines with Tailscale', group: 'Get started', description: 'Pair two AX installations and message agents on another machine.' },
   { slug: 'harnesses', source: 'claude.rc/harnesses.md', title: 'Supported harnesses', group: 'Get started', description: 'Choose an integration and understand its current limits.' },
   { slug: 'troubleshooting', source: 'claude.rc/troubleshooting.md', title: 'Delivery and recovery', group: 'Reference', description: 'Find your agents, understand delivery status, and investigate a stuck handoff.' },
   { slug: 'architecture', source: 'claude.rc/architecture.md', title: 'How AX works', group: 'Reference', description: 'One local broker, a durable mailbox, and native integrations for each harness.' },

@@ -2,7 +2,7 @@
 
 AX 0.7.2 fixes permission opt-in on resumed and spawned sessions and prevents a Claude transition that silently loses incoming messages.
 
-- A named session keeps its saved AX bypass opt-in when the environment has no override. An explicit `AX_ALLOW_BYPASS=0` still disables it.
+- A named session keeps its saved AX bypass opt-in when the environment has no override. `AX_ALLOW_BYPASS=0` clears saved consent; explicit native bypass arguments still opt in.
 - Explicit native Claude bypass arguments opt a spawned peer into AX messaging. Ordinary permission modes and the option that merely makes bypass available do not opt in. Spawned peers still do not inherit a parent's bypass opt-in implicitly.
 - AX disables Claude's agent view for sessions it launches. Claude can otherwise re-host the conversation without its channel flag, leaving AX tools connected while incoming messages fail to wake the model. Background tool tasks retain their native behavior. See [the upstream report](https://github.com/anthropics/claude-code/issues/90160).
 

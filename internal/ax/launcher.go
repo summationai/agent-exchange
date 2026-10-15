@@ -503,6 +503,7 @@ Ask either agent to message another by name.
   ax resolve MESSAGE_ID abandon Release a stuck message without redelivery
   ax policy NAME hold           Pause incoming mail (accept/hold/refuse)
   ax doctor                     Diagnose harnesses, Channels, and local discovery
+  ax network                    Set up paired Tailscale discovery (development)
   ax external NAME POLICY       Set external policy: refuse, verified, all
   ax version                    Show the AX version`)
 		return nil
@@ -527,10 +528,17 @@ Ask either agent to message another by name.
 	defer cancel()
 	// Do not export GOMAXPROCS or apply inherited limits to native harnesses.
 	switch args[0] {
-	case "serve", "bridge", "hook", "inbox", "attach", "verify":
+	case "serve", "bridge", "hook", "inbox", "attach", "verify", "network":
 		runtime.GOMAXPROCS(1)
 	}
 	switch args[0] {
+	case "network":
+		if err := resourcePause(dir, time.Now()); err != nil {
+			return err
+		}
+		stopResources := watchResources(context.Background(), dir, cancel, func() { os.Exit(75) })
+		defer stopResources()
+		return networkCLI(ctx, dir, args[1:], os.Stdin, os.Stdout)
 	case "attach":
 		inputInfo, err := os.Stdin.Stat()
 		if err != nil {

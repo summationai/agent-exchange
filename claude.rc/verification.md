@@ -47,7 +47,7 @@ The repository is public as of September 19, 2026. [AX 0.5.4](https://github.com
 
 The exact public README command installed and reinstalled 0.5.4 on macOS ARM64 in a fresh home directory with no GitHub credentials. It preserved a single shell PATH entry, and the installed broker started and answered an agent-list request. The published installer matched both its release checksum and the reviewed source.
 
-Live harness exchanges on Linux and WSL, native Windows, remote transport, every native subcommand, and all host policy configurations are outside the verified scope. Native acceptance is distinct from a model acknowledgment and from successful task completion.
+For that release, live harness exchanges on Linux and WSL, native Windows, remote transport, every native subcommand, and all host policy configurations were outside the verified scope. Native acceptance is distinct from a model acknowledgment and from successful task completion.
 
 ## Pi
 
@@ -60,3 +60,19 @@ Killing only Pi’s messaging child left the native Pi process alive. The extens
 Contract tests additionally cover busy follow-up delivery, native argument preservation, immutable session binding, reloads during an outstanding initialization, new/fork lifecycle events, rejection of stale connection results, and MCP initialization. Native process tests verify that AX is replaced by Pi, the name lock lasts until Pi exits, and Pi’s exit status is preserved. Pi pane-spawn requests are rejected before opening a pane or reserving a name. The JavaScript contract fixture stubs schema construction; the live exchange loaded the actual schemas.
 
 Pi’s live evidence uses RPC mode. Interactive TUI rendering, live busy-turn delivery, and Linux/WSL exchanges remain outside the verified scope. A pipe-write receipt remains distinct from confirmed native acceptance or a model acknowledgment.
+
+## AX 0.8.0 and Tailscale
+
+October 15, 2026. Source `fd068ab60d427ffd910d72059582c18a4f3f3b38` combines the reviewed Tailscale stack at `2891c4c` with the three fixes shipped in 0.7.2. The two-host tests used separate AX state on two physical Apple Silicon Macs. Native Codex was 0.162.1; the existing local Grok reviewer was 1.0.52.
+
+A laptop MCP test endpoint sent a request to native Codex on the second Mac. Codex fetched it through its AX tool, replied with the expected token, and independently sent a new message back. Qualified remote names and the source reply mapping were verified. The native session continued in tmux after its launching SSH connection ended.
+
+A second request was submitted while only the destination network adapter was stopped. Its broker and Codex session survived. After adapter restart, the request reached Codex and the expected reply returned without restarting the native session. The sender recorded acknowledgment; remote task completion remained unknown.
+
+The user's normal local AX runtime then exchanged a request and reply with the remote Codex worker. An existing native Grok session also sent a request to that Codex worker, received its reply, and returned the expected token to the initiating endpoint. That complete model-driven route took 61.254 seconds; it is not a transport-latency measurement. Subsequent delegated work ran in another remote Codex conversation in a real repository.
+
+Idle snapshots of the two persistent broker/adapter pairs showed 0.0 to 0.4 percent CPU and about 15 to 23 MiB RSS per helper. Earlier isolated tests exercised peer rejection, revocation, bounded discovery overflow, and adapter shutdown while local MCP stayed usable. These are bounded observations, not a long-duration resource guarantee or a live suspend/resume test.
+
+Before upgrading the user's normal runtime, a consistent schema-3 mailbox copy migrated to schema 4 with all 951 message payloads and 22 agent credential hashes unchanged. At the later cutover, all 963 original messages and 22 credentials were retained. Two running 0.7.2 Claude-channel bridge fixtures also exchanged messages before and after a broker-only upgrade, retaining their bridge PIDs. This tests bridge compatibility; it does not claim a native Claude model exchange across two hosts.
+
+The full race suite, vet, and build passed on the combined source. Autoreview and the AX peer review were clean. Release-version packaging and the accompanying website are checked separately at the release head. Live cross-machine Linux/WSL, address changes, suspend/resume, and a two-host native Claude-to-Codex exchange remain unverified. Certificates require explicit manual re-pairing for rotation; remote spawning and automatic task-outcome synchronization are not provided by the network adapter.

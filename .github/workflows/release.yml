@@ -119,7 +119,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          version=$(sed -n 's/^const Version = "\(.*\)"/\1/p' internal/ax/launcher.go)
+          version=$(sed -n 's/^var Version = "\([^"]*\)".*/\1/p' internal/ax/launcher.go)
           test "$RELEASE_TAG" = "v$version"
           cp install.sh LICENSE dist/
           cd dist

@@ -1,6 +1,6 @@
 # Install Agent Exchange (AX)
 
-Follow this guide when the user asks you to install or update Agent Exchange. AX connects named Claude Code, Codex CLI, Grok Build, OpenCode, and Pi sessions on the same machine. Its command is `ax`.
+Follow this guide when the user asks you to install or update Agent Exchange. AX connects named Claude Code, Codex CLI, Grok Build, OpenCode, and Pi sessions on the same machine. Its command is `ax`. Optional Tailscale pairing connects agents across explicitly paired machines.
 
 ## Requirements
 
@@ -59,9 +59,10 @@ Installing a new binary does not replace a running broker or bridge. New feature
 1. Let active work finish and close the AX-launched sessions normally. Keep their names for resume.
 2. Identify the current user's `ax serve` process that owns the socket in the relevant AX state directory, using the system's process and socket inspection tools. The default socket is `$HOME/.ax/broker.sock`; `AX_HOME` selects another directory.
 3. Stop only that verified broker PID with `kill -TERM BROKER_PID` and wait for it to exit before proceeding. Do not signal a launcher, bridge, harness, or process group. If its identity cannot be verified, leave it running and report that the broker update is still pending.
-4. Run `ax agents` to start the broker from the installed binary, then relaunch the saved AX names.
+4. Before starting the new broker, make a private backup of the stopped runtime's mailbox files and saved sessions. The default directory is `$HOME/.ax`; `AX_HOME` can select another. These files contain credentials and messages, so preserve owner-only access.
+5. Run `ax agents` to start the broker from the installed binary, then relaunch the saved AX names.
 
-Saved conversations and mail are preserved. Version 0.6.1 upgrades the mailbox to schema 3; an older broker cannot open that upgraded mailbox. Do not downgrade the broker against it.
+Saved conversations and mail are preserved. AX 0.8.0 upgrades the mailbox to schema 4. A 0.7.x broker cannot open it. Reinstalling an older binary is not a rollback; preserve the backup and any messages written after the upgrade. Existing bridges can reconnect for local messaging, but relaunch sessions after active work finishes to load the new tools and cross-machine guidance.
 
 In AX 0.7.0, replace the old `-name` option in saved commands with `-n`, for example `ax claude -n api`. Keep the same agent name to retain its identity and saved conversation.
 
@@ -71,12 +72,16 @@ Download the installer first to inspect it or select a release:
 
 ```sh
 curl -fsSL https://useax.dev/install.sh -o install-ax.sh
-AX_VERSION=v0.7.1 sh install-ax.sh
+AX_VERSION=v0.8.0 sh install-ax.sh
 ```
 
 `AX_INSTALL_DIR` chooses another binary directory. `AX_NO_MODIFY_PATH=1` disables changes to shell configuration. Set these variables on the `sh install-ax.sh` invocation. With a custom directory, add that directory to PATH before running AX.
 
 Archives, checksums, and the MIT license are also available from [GitHub Releases](https://github.com/summationai/agent-exchange/releases/latest).
+
+## Optional Tailscale messaging
+
+Local-only operation remains the default. Install and connect Tailscale separately on both machines, then follow [Tailscale setup](https://useax.dev/docs/tailscale) only when the user requests cross-machine messaging. Pairing cards identify AX installations; discovery and messaging require explicit grants. Run `ax network serve` on each paired machine. The installer does not change Tailscale settings, pair machines, or enable a listener.
 
 ## Remove AX
 

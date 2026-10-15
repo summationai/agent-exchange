@@ -42,6 +42,13 @@ em { font-family: Georgia, "Times New Roman", serif; font-weight: 400; }
 .hero-harnesses li { border: 1px solid #cdd2bf; background: #eff1e6; border-radius: 5px; padding: 6px 9px; font-size: 13px; font-weight: 600; white-space: nowrap; }
 .hero-harnesses li span { margin-inline: 2px; }
 .claude-mark { color: #b45a38; }
+.tailscale-card { display: flex; align-items: center; gap: 16px; max-width: 510px; margin-bottom: 14px; padding: 16px; border: 1px solid #a9b9cf; border-radius: 7px; background: #edf2fa; color: #242722; text-decoration: none; }
+.tailscale-card:hover { border-color: #536b8d; background: #e3ebf7; }
+.tailscale-card img { flex: none; width: 124px; height: auto; }
+.tailscale-copy { display: grid; gap: 3px; min-width: 0; }
+.tailscale-copy strong { font-size: 16px; line-height: 1.3; }
+.tailscale-copy > span { color: #465972; font-size: 12px; line-height: 1.4; }
+.tailscale-arrow { margin-left: auto; font-size: 21px; }
 .local-promise { padding: 17px 19px; border-left: 3px solid var(--green); background: #eaf0df; max-width: 510px; }
 .local-promise h2 { font-size: 20px; letter-spacing: -.025em; line-height: 1.3; margin-bottom: 8px; }
 .local-promise p { font-size: 14px; line-height: 1.6; margin-bottom: 8px; }
@@ -249,6 +256,8 @@ th:first-child, td:first-child { padding-left: 10px; }
   .hero-copy > .eyebrow { font-size: 9px; margin-bottom: 10px; }
   .hero-harnesses { margin-block: 12px; } .hero-harnesses .eyebrow { margin-bottom: 7px; font-size: 9px; }
   .hero-harnesses ul { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; } .hero-harnesses li { padding: 5px 9px; font-size: 12px; }
+  .tailscale-card { max-width: none; gap: 12px; padding: 12px; margin-bottom: 10px; }
+  .tailscale-card img { width: 100px; } .tailscale-copy strong { font-size: 15px; }
   .local-promise { max-width: none; padding: 12px 14px; } .local-promise h2 { font-size: 17px; margin-bottom: 5px; }
   .local-promise p { font-size: 12px; line-height: 1.5; margin-bottom: 5px; } .local-promise .provider-note { font-size: 11px; }
   .install-card { padding: 15px; }

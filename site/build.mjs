@@ -58,7 +58,7 @@ for (const file of ['JetBrainsMono-Regular.woff2', 'JetBrainsMono-Bold.woff2', '
 }
 await copyFile(new URL('AGENTS.md', root), new URL('agents.md', output));
 await copyFile(new URL('install.sh', root), new URL('install.sh', output));
-for (const file of ['_headers', '_redirects', 'style.css', 'site.js', 'favicon.svg']) {
+for (const file of ['_headers', '_redirects', 'style.css', 'site.js', 'favicon.svg', 'tailscale.svg']) {
   await copyFile(new URL(file, import.meta.url), new URL(file, output));
 }
 const landing = await readFile(new URL('index.html', import.meta.url), 'utf8');

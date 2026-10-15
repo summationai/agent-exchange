@@ -51,6 +51,32 @@ Delivery evidence progresses from queued to native handoff, content fetch, and a
 
 AX 0.6.1 notifies the sender when queued mail expires or is refused. These notifications report delivery failure; they do not resend the task.
 
+## Claude tools work, but incoming messages do not wake the agent
+
+`channel_written` means AX wrote to the MCP channel. It does not prove Claude
+accepted the event or that the model read it. On user request, the recipient can
+call `list_pending` once, then fetch the relevant offered messages. Do not resend
+the task or assume unacknowledged messages are blocking the queue.
+
+Claude's agent view can re-host a conversation without preserving its channel
+opt-in. MCP tools remain available, but automatic wakes stop. This matches
+[upstream issue 90160](https://github.com/anthropics/claude-code/issues/90160).
+AX sets the documented `disableAgentView` setting for its Claude launches to
+prevent that transition. This applies to fresh sessions, resumes, and pane
+spawns; it does not edit global Claude settings. Claude's agent view and session
+backgrounding are unavailable in these sessions. Background Bash and subagent
+tasks are separate and retain their native behavior.
+
+This prevention does not repair an already re-hosted process. Let its work
+finish, close it normally, and relaunch through AX with the same name. If a native
+background copy still exists, stop that copy through Claude's own controls before
+resuming; otherwise the resume may attach to it again. AX does not stop it for you.
+Confirm Claude's channel prompt when it appears. Its
+[channel documentation](https://code.claude.com/docs/en/channels) requires
+per-session opt-in, and the
+[environment reference](https://code.claude.com/docs/en/env-vars) describes the
+agent-view guard. Existing saved conversations and mailbox state are preserved.
+
 ## The message is held by policy
 
 An unknown permission mode or an unapproved bypass mode can hold mail. The receiving harness’s permissions still apply to delegated work. Inspect the launch settings before changing policy.

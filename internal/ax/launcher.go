@@ -225,7 +225,9 @@ func launch(ctx context.Context, dir, host string, args []string, spawnToken str
 		for _, event := range []string{"SessionStart", "UserPromptSubmit", "PreToolUse", "PermissionRequest", "PostToolUse", "Stop"} {
 			hooks[event] = []object{{"hooks": []object{hook}}}
 		}
-		settings := object{"hooks": hooks}
+		// Agent view can re-host Claude without its channel opt-in, leaving MCP
+		// connected but unable to wake the model (anthropics/claude-code#90160).
+		settings := object{"hooks": hooks, "disableAgentView": true}
 		allowed := []string{}
 		for _, tool := range toolSpecs {
 			// Launching a process retains the harness's normal tool approval.
@@ -243,7 +245,7 @@ func launch(ctx context.Context, dir, host string, args []string, spawnToken str
 				fmt.Fprintln(os.Stderr, "Claude has not saved this conversation yet; continuing with the same session ID.")
 			}
 		}
-		fmt.Fprintf(os.Stderr, "Agent Exchange · %s\nConfirm Claude's local development Channel prompt when it appears.\n", name)
+		fmt.Fprintf(os.Stderr, "Agent Exchange · %s\nConfirm Claude's local development Channel prompt when it appears.\nClaude agent view is disabled for this session to preserve AX channel delivery.\n", name)
 	} else if host == "codex" {
 		b, e := exec.Command(nativeBin, "queue", "--help").Output()
 		if e != nil || !strings.Contains(string(b), "--thread") {

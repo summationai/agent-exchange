@@ -47,6 +47,7 @@ type Agent struct {
 	Connectivity   agentCapabilities     `json:"capabilities"`
 }
 type Message struct {
+	TaskOutcome     string           `json:"task_outcome,omitempty"`
 	NetworkOrigin   *networkOrigin   `json:"network_origin,omitempty"`
 	RemoteMessageID string           `json:"remote_message_id,omitempty"`
 	Provenance      json.RawMessage  `json:"provenance,omitempty"`
@@ -82,6 +83,8 @@ type peer struct {
 	capabilities *deliveryCapabilities
 }
 type serverConn struct {
+	networkWake chan struct{}
+	networkDone chan struct{}
 	net.Conn
 	writeMu         sync.Mutex
 	agent           string
@@ -98,12 +101,13 @@ func (c *serverConn) send(p packet) error {
 }
 
 type broker struct {
-	mu          sync.Mutex
-	db          *sql.DB
-	peers       map[string]*peer
-	lastCleanup time.Time
-	dir         string
-	lastReap    time.Time
+	networkWatcher *serverConn
+	mu             sync.Mutex
+	db             *sql.DB
+	peers          map[string]*peer
+	lastCleanup    time.Time
+	dir            string
+	lastReap       time.Time
 }
 
 func openBroker(dir string) (*broker, error) {
@@ -308,6 +312,9 @@ func Serve(ctx context.Context, dir string) error {
 				}
 				b.mu.Lock()
 				result, e := b.request(sc, p.Method, p.Params)
+				if p.Method == "ax.send" || p.Method == "ax.reply" || p.Method == "ax.follow_up" || p.Method == "ax.resend" || p.Method == "ax.presence" || p.Method == "ax.ready" {
+					b.networkChanged()
+				}
 				b.mu.Unlock()
 				reply := packet{ID: p.ID}
 				if e != nil {
@@ -361,6 +368,10 @@ func (b *broker) event(id, state string, epoch int64) error {
 func (b *broker) disconnect(c *serverConn) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if b.networkWatcher == c {
+		b.networkWatcher = nil
+		close(c.networkDone)
+	}
 	p := b.peers[c.agent]
 	if p == nil || p.conn != c {
 		return
@@ -423,6 +434,9 @@ func (b *broker) request(c *serverConn, method string, params json.RawMessage) (
 	if strings.HasPrefix(method, "ax.network.") {
 		if c.agent != "" {
 			return nil, errors.New("network administration is not a model tool")
+		}
+		if method == "ax.network.watch" {
+			return b.watchNetwork(c)
 		}
 		return b.networkRequest(method, params)
 	}
@@ -707,6 +721,8 @@ func (b *broker) request(c *serverConn, method string, params json.RawMessage) (
 		return p.Agent, b.save(p)
 	case "ax.list":
 		return b.list(), nil
+	case "ax.report_task":
+		return b.reportNetworkTask(p, a.MessageID, a.State)
 	case "ax.pending":
 		after, err := integerArgument(a.AfterSeq, "after_seq", 0, 0, maxSequence)
 		if err != nil {

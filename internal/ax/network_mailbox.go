@@ -11,6 +11,8 @@ import (
 	"time"
 )
 
+var errNetworkCacheFull = errors.New("remote identity cache is full; local endpoint slots are reserved")
+
 // These are private broker operations for the network adapter, never TCP RPCs
 // or model tools. The A2A binding will translate its authenticated requests here.
 type networkRoute struct {
@@ -96,7 +98,7 @@ func (b *broker) networkProxy(alias string, paired networkPeer, id, name, host s
 		}
 		// Reserve local slots even when an authorized peer sends many identities.
 		if remoteCount >= 64 || len(b.peers) >= 192 {
-			return nil, errors.New("remote identity cache is full; local endpoint slots are reserved")
+			return nil, errNetworkCacheFull
 		}
 	}
 	p, err := b.messagePeer(b.db, localID)
@@ -166,6 +168,10 @@ func (b *broker) networkReceive(alias string, envelope networkEnvelope) (Message
 }
 
 func (b *broker) networkOutbox(alias string) (*networkEnvelope, error) {
+	return b.networkOutboxExcept(alias, nil)
+}
+
+func (b *broker) networkOutboxExcept(alias string, skip []string) (*networkEnvelope, error) {
 	paired, err := b.networkPeer(alias)
 	if err != nil {
 		return nil, err
@@ -208,7 +214,7 @@ func (b *broker) networkOutbox(alias string) (*networkEnvelope, error) {
 		if err != nil {
 			return nil, err
 		}
-		if to.Policy != "accept" {
+		if slices.Contains(skip, to.Remote.AgentID) || to.Policy != "accept" {
 			continue
 		}
 		parentID := ""
@@ -286,20 +292,49 @@ func (b *broker) networkHandoffAllowed(m Message, to *peer) bool {
 
 func (b *broker) networkRequest(method string, params json.RawMessage) (any, error) {
 	var a struct {
-		Alias    string          `json:"alias"`
-		ID       string          `json:"message_id"`
-		RemoteID string          `json:"remote_message_id"`
-		Agents   []networkAgent  `json:"agents"`
-		Envelope networkEnvelope `json:"envelope"`
+		Skip        []string        `json:"skip_recipients"`
+		Fingerprint string          `json:"fingerprint"`
+		Alias       string          `json:"alias"`
+		ID          string          `json:"message_id"`
+		Recipient   string          `json:"recipient_id"`
+		After       string          `json:"after"`
+		RemoteID    string          `json:"remote_message_id"`
+		Agents      []networkAgent  `json:"agents"`
+		Envelope    networkEnvelope `json:"envelope"`
 	}
 	if json.Unmarshal(params, &a) != nil || !validOrigin.MatchString(a.Alias) {
 		return nil, errors.New("invalid network adapter request")
 	}
+	if a.Fingerprint != "" {
+		paired, err := b.networkPeer(a.Alias)
+		if err != nil || networkFingerprint(paired.Card) != a.Fingerprint {
+			return nil, errors.New("paired identity changed during network request")
+		}
+	}
 	switch method {
+	case "ax.network.task":
+		return b.networkTask(a.Alias, a.Recipient, a.ID)
+	case "ax.network.tasks":
+		return b.networkTaskList(a.Alias, a.Recipient, a.After)
+	case "ax.network.cancel":
+		m, err := b.networkTask(a.Alias, a.Recipient, a.ID)
+		if err != nil {
+			return nil, err
+		}
+		if m.TaskOutcome == "canceled" {
+			return m, nil
+		}
+		if m.State != "queued" {
+			return nil, errors.New("task cannot be canceled after native handoff")
+		}
+		return b.saveNetworkTask(m, "canceled", true)
 	case "ax.network.receive":
 		return b.networkReceive(a.Alias, a.Envelope)
 	case "ax.network.outbox":
-		return b.networkOutbox(a.Alias)
+		if len(a.Skip) > 64 {
+			return nil, errors.New("too many skipped recipients")
+		}
+		return b.networkOutboxExcept(a.Alias, a.Skip)
 	case "ax.network.accepted":
 		return b.networkAccepted(a.Alias, a.ID, a.RemoteID)
 	case "ax.network.sync":
@@ -307,11 +342,16 @@ func (b *broker) networkRequest(method string, params json.RawMessage) (any, err
 		if err != nil {
 			return nil, err
 		}
-		if len(a.Agents) > 64 {
+		if len(a.Agents) > networkDiscoveryLimit {
 			return nil, errors.New("too many remote agents")
 		}
+		skipped := 0
 		for _, agent := range a.Agents {
 			p, err := b.networkProxy(a.Alias, paired, agent.ID, agent.Name, agent.Host)
+			if errors.Is(err, errNetworkCacheFull) {
+				skipped++
+				continue
+			}
 			if err != nil {
 				return nil, err
 			}
@@ -320,7 +360,7 @@ func (b *broker) networkRequest(method string, params json.RawMessage) (any, err
 				return nil, err
 			}
 		}
-		return object{"ok": true}, nil
+		return object{"ok": true, "synced": len(a.Agents) - skipped, "skipped_cache_full": skipped}, nil
 	default:
 		return nil, fmt.Errorf("unsupported private network operation %q", method)
 	}

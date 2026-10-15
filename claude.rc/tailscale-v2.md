@@ -56,9 +56,15 @@ The names after a trust command are local agents that the named remote installat
 
 The private network state lives under `AX_HOME/network`. Identity keys and pairing policy use the existing private file, ownership, locking, and atomic-write helpers. Losing this directory requires pairing again. Initialization is idempotent and never silently regenerates a key. Certificates expire after one year; the foundation reports an expired identity rather than rotating it behind a peer's back. Certificate renewal with the same installation identity is follow-up work before general release.
 
-Only authenticated `GET /ax/network/v1/agents` is exposed. It returns a protocol version, machine alias, and a bounded list of exported agent names, harness types, and current state. It excludes native session IDs, workspaces, permission settings, credentials, messages, and transcripts. There is no socket proxy, remote broker administration, shell, spawn, kill, or recovery API. Unsupported methods and routes fail closed.
+Only authenticated `GET /ax/network/v1/agents` is exposed. It returns a protocol version, machine alias, and a bounded list of exported AX agent IDs, names, harness types, and current state. It excludes native session IDs, workspaces, permission settings, credentials, messages, and transcripts. There is no socket proxy, remote broker administration, shell, spawn, kill, or recovery API. Unsupported methods and routes fail closed.
 
 ## Message routing milestone
+
+The broker checkpoint implements private adapter operations for remote discovery snapshots, a durable outbox, destination import, and destination acceptance. It is not a TCP message API. The A2A binding and network workers remain to be connected before agents can send across machines.
+
+`ax network messaging ALIAS on` explicitly grants messaging to a paired installation; `off` holds later outbound transfers and incoming native handoffs. Both sides must opt in. Incoming scope uses the same explicit local-agent export list as discovery. Pairing and AX updates alone never grant messaging. Remote identities are qualified by the local peer alias. External provenance remains intact, and the receiving agent's external policy still applies.
+
+Destination idempotency and absolute expiration are stored in the existing SQLite message transaction. Lost network acceptance can be retried with the same source message ID, returning the same destination message ID and recipient sequence. Acceptance records and cross-machine parent mappings survive restart. A reply acknowledges the original request; network acceptance alone does not claim native delivery or completed work.
 
 Keep the existing MCP tool names. Discovery merges explicitly permitted remote agents, qualified by the paired local machine alias. Cache entries carry the installation fingerprint and remote agent ID; a name or IP alone is not an identity. A duplicate remote name never shadows a local name. Pairing is direct, with no transitive discovery or forwarding through other machines.
 
@@ -79,6 +85,8 @@ Validate normative fields, task ownership, message roles and parts, version head
 ## Resource and failure budgets
 
 Foundation limits: 32 trusted peers, 64 exported names per peer, 16 accepted connections, 8 KiB HTTP headers, 256 KiB configuration, 5-second read/write deadlines, and 10-second idle keepalive. The existing one-core Go runtime and shared AX CPU guard also apply to the network adapter. Discovery has no background refresh loop, model calls, reconnect loop, or persistent outbound connection. Closing the adapter never closes a harness or the local broker.
+
+The broker checkpoint caches at most 64 remote identities and reserves at least 64 of the existing endpoint slots for local agents. It archives revoked or idle remote entries after one minute without deleting their durable identities, mail, or retry keys. Agent discovery reads and verifies each paired installation once per list rather than once per remote agent.
 
 Before routing ships: one worker per paired peer, one active outbound request per peer, 1-second initial backoff growing to 60 seconds with jitter, deadlines and TTL checked before every retry, and a bounded durable outbox. Wake workers on new messages and connectivity hints, not tight polling. Resolve and bound the retry, queue, and storage budgets in the routing PR. Measure idle CPU, reconnect CPU, RSS, and file descriptors under peer outage and suspend/resume.
 

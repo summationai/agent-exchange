@@ -40,6 +40,13 @@ type sendReceipt struct {
 // still holding that value has never reported itself alive.
 func agentSnapshot(p *peer) Agent {
 	a := p.Agent
+	if p.Remote != nil {
+		a.Online = !p.seen.IsZero() && time.Since(p.seen) <= 45*time.Second && p.State != "offline"
+		if !a.Online {
+			a.State = "offline"
+		}
+		return a
+	}
 	a.Capabilities = p.capabilities
 	a.Online = p.conn != nil && time.Since(p.seen) <= 15*time.Second
 	a.Connectivity = capabilities(p, a.Online)
@@ -70,6 +77,8 @@ func agentSnapshot(p *peer) Agent {
 
 func deliveryEvidence(state string) string {
 	switch state {
+	case "remote_accepted":
+		return "Committed by the paired remote broker; native handoff and task completion are not confirmed."
 	case "queued":
 		return "Queued durably; not yet handed to the harness."
 	case "handoff_started":
@@ -90,6 +99,18 @@ func deliveryEvidence(state string) string {
 }
 
 func queueReason(to, from *peer) string {
+	if to.Remote != nil {
+		if to.Policy != "accept" {
+			return "Remote recipient policy is " + to.Policy + "."
+		}
+		if from == nil {
+			return "Sender permission state is unavailable; remote transfer remains held."
+		}
+		if !safe(from) {
+			return permissionBlockReason("Sender", from)
+		}
+		return "Awaiting a permitted transfer to the paired broker; network acceptance and native delivery are not confirmed."
+	}
 	snapshot := agentSnapshot(to)
 	switch {
 	case snapshot.BindingError != "":
@@ -145,7 +166,7 @@ func (b *broker) sendResult(q interface{ QueryRow(string, ...any) *sql.Row }, m 
 		return m, err
 	}
 	if m.State == "queued" {
-		r.Evidence += " " + messageQueueReason(to, b.peers[m.Sender.ID], m)
+		r.Evidence += " " + b.messageQueueReason(to, b.peers[m.Sender.ID], m)
 	}
 	m.Receipt = r
 	return m, nil
@@ -217,12 +238,12 @@ func (b *broker) pending(p *peer, after int64) (pendingPage, error) {
 				return out, err
 			}
 		}
-		if state != "queued" && p.Policy == "accept" && safe(p) && sender != nil && safe(sender) && externalHandoff(p, m) {
+		if state != "queued" && p.Policy == "accept" && safe(p) && sender != nil && safe(sender) && externalHandoff(p, m) && b.networkHandoffAllowed(m, p) {
 			preview := []rune(m.Text)
 			item.Preview = string(preview[:min(len(preview), 100)])
 		}
 		if state == "queued" {
-			item.Evidence += " " + messageQueueReason(p, sender, m)
+			item.Evidence += " " + b.messageQueueReason(p, sender, m)
 			if headSeq < m.Seq {
 				item.BlockedBy = headID
 				item.Evidence += " An earlier message is " + headState + " and blocks this FIFO handoff."

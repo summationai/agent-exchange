@@ -217,7 +217,7 @@ func (b *broker) checkInbox(p *peer) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !externalHandoff(p, m) {
+	if !externalHandoff(p, m) || !b.networkHandoffAllowed(m, p) {
 		return object{"message": nil}, nil
 	}
 	sender, err := b.messagePeer(b.db, m.Sender.ID)

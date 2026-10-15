@@ -33,7 +33,7 @@ func validateRelayContent(p *peer, provenance, data json.RawMessage) error {
 	if p.Kind == "relay" && len(provenance) == 0 {
 		return errors.New("a relay must send provenance")
 	}
-	if p.Kind != "relay" && len(provenance) > 0 {
+	if p.Kind != "relay" && p.Remote == nil && len(provenance) > 0 {
 		return errors.New("only a relay endpoint may set provenance")
 	}
 	if len(provenance) > 0 {
@@ -97,7 +97,14 @@ func externalHandoff(to *peer, m Message) bool {
 	return ok && to.relayGuidance
 }
 
-func messageQueueReason(to, from *peer, m Message) string {
+func (b *broker) messageQueueReason(to, from *peer, m Message) string {
+	if m.NetworkOrigin != nil && !b.networkHandoffAllowed(m, to) {
+		return "The paired machine's messaging grant or recipient scope is no longer valid; this incoming message remains held."
+	}
+	if to.Remote != nil && !b.networkRouteAllowed(to.Remote) {
+		return "The remote messaging grant is no longer valid; this outgoing message remains held."
+	}
+
 	if len(m.Provenance) > 0 {
 		if ok, _ := admitsExternal(to, m.Provenance); !ok {
 			return "Recipient external policy is " + externalPolicy(to.Agent) + "; this relayed message waits."
@@ -131,7 +138,7 @@ func (b *broker) peersChanged() {
 
 func peerChangeMethod(method string) bool {
 	switch method {
-	case "ax.enroll", "ax.connect", "ax.presence", "ax.lifecycle", "ax.external", "ax.policy", "ax.ready", "ax.capabilities":
+	case "ax.enroll", "ax.connect", "ax.presence", "ax.lifecycle", "ax.external", "ax.policy", "ax.ready", "ax.capabilities", "ax.network.sync", "ax.network.receive":
 		return true
 	}
 	return false

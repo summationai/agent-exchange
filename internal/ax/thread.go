@@ -134,7 +134,7 @@ func (b *broker) thread(p *peer, id, after string) (threadPage, error) {
 			}
 			state := item.State
 			offered := state == "handoff_started" || state == "delivery_uncertain" || state == "wake_accepted" || state == "channel_written" || state == "content_served" || state == "acknowledged"
-			if !offered || p.Policy != "accept" || !safe(p) || !safe(sender) || !externalHandoff(p, item.Message) {
+			if !offered || p.Policy != "accept" || !safe(p) || !safe(sender) || !externalHandoff(p, item.Message) || !b.networkHandoffAllowed(item.Message, p) {
 				item.Text = ""
 				item.Data, item.Provenance = nil, nil
 				item.Withheld = true

@@ -27,6 +27,7 @@ var validName = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_-]{0,47}$`)
 var validID = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,80}$`)
 
 type Agent struct {
+	Remote         *networkRoute         `json:"remote,omitempty"`
 	Kind           string                `json:"kind,omitempty"`
 	External       string                `json:"external,omitempty"`
 	NotifyTerminal bool                  `json:"notify_terminal,omitempty"`
@@ -46,23 +47,25 @@ type Agent struct {
 	Connectivity   agentCapabilities     `json:"capabilities"`
 }
 type Message struct {
-	Provenance    json.RawMessage  `json:"provenance,omitempty"`
-	Data          json.RawMessage  `json:"data,omitempty"`
-	HandoffID     string           `json:"handoff_id,omitempty"` // Offer-only, never stored in the mailbox.
-	ID            string           `json:"message_id"`
-	Sender        Agent            `json:"sender"`
-	Recipient     string           `json:"recipient_id"`
-	Text          string           `json:"text"`
-	Parent        string           `json:"in_reply_to,omitempty"`
-	ResendOf      string           `json:"resend_of,omitempty"`
-	Thread        string           `json:"thread_id,omitempty"`
-	Seq           int64            `json:"recipient_seq"`
-	Created       int64            `json:"created_at_ms"`
-	Expires       int64            `json:"expires_at_ms"`
-	Depth         int              `json:"reply_depth"`
-	State         string           `json:"status"`
-	Receipt       *sendReceipt     `json:"receipt,omitempty"`
-	QueuedContext *deliveryContext `json:"queued_context,omitempty"`
+	NetworkOrigin   *networkOrigin   `json:"network_origin,omitempty"`
+	RemoteMessageID string           `json:"remote_message_id,omitempty"`
+	Provenance      json.RawMessage  `json:"provenance,omitempty"`
+	Data            json.RawMessage  `json:"data,omitempty"`
+	HandoffID       string           `json:"handoff_id,omitempty"` // Offer-only, never stored in the mailbox.
+	ID              string           `json:"message_id"`
+	Sender          Agent            `json:"sender"`
+	Recipient       string           `json:"recipient_id"`
+	Text            string           `json:"text"`
+	Parent          string           `json:"in_reply_to,omitempty"`
+	ResendOf        string           `json:"resend_of,omitempty"`
+	Thread          string           `json:"thread_id,omitempty"`
+	Seq             int64            `json:"recipient_seq"`
+	Created         int64            `json:"created_at_ms"`
+	Expires         int64            `json:"expires_at_ms"`
+	Depth           int              `json:"reply_depth"`
+	State           string           `json:"status"`
+	Receipt         *sendReceipt     `json:"receipt,omitempty"`
+	QueuedContext   *deliveryContext `json:"queued_context,omitempty"`
 }
 type peer struct {
 	relayGuidance             bool
@@ -417,8 +420,14 @@ func (b *broker) request(c *serverConn, method string, params json.RawMessage) (
 	if e := json.Unmarshal(params, &a); e != nil {
 		return nil, errors.New("invalid parameters")
 	}
+	if strings.HasPrefix(method, "ax.network.") {
+		if c.agent != "" {
+			return nil, errors.New("network administration is not a model tool")
+		}
+		return b.networkRequest(method, params)
+	}
 	if method == "ax.ping" {
-		return object{"version": "1", "local_attach": true, "relay": true}, nil
+		return object{"version": "1", "local_attach": true, "relay": true, "network_mailbox": true}, nil
 	}
 	if method == "ax.enroll" {
 		s := a.Session
@@ -719,11 +728,14 @@ func (b *broker) request(c *serverConn, method string, params json.RawMessage) (
 		if e != nil {
 			return nil, e
 		}
+		if m.Recipient == p.ID && m.NetworkOrigin != nil && (method == "ax.get_message" || method == "ax.status") && !b.networkHandoffAllowed(m, p) {
+			return nil, errors.New("paired machine's messaging grant or recipient scope has been revoked")
+		}
 		if m.Recipient == p.ID && len(m.Provenance) > 0 && (method == "ax.get_message" || method == "ax.status") {
 			if !p.relayGuidance {
 				return nil, errors.New("bridge lacks external guidance; finish the AX update and relaunch this session")
 			}
-			if !externalHandoff(p, m) {
+			if !externalHandoff(p, m) || !b.networkHandoffAllowed(m, p) {
 				return nil, errors.New("external message is held by recipient policy; the owner can inspect it with ax status")
 			}
 		}
@@ -793,7 +805,16 @@ func validNative(id string) bool {
 // Lead with connected peers, ahead of sessions whose bridge is reconnecting.
 func (b *broker) list() []Agent {
 	out := []Agent{}
+	var routes map[string]string
 	for _, p := range b.peers {
+		if p.Remote != nil {
+			if routes == nil {
+				routes = b.networkAllowedRoutes()
+			}
+			if routes[p.Remote.Alias] != p.Remote.Fingerprint {
+				continue
+			}
+		}
 		out = append(out, agentSnapshot(p))
 	}
 	rank := func(a Agent) int {
@@ -811,6 +832,9 @@ func (b *broker) resolve(target string) (*peer, error) {
 	var matches []*peer
 	for _, p := range b.peers {
 		if p.ID == target || p.Name == target {
+			if p.Remote != nil && !b.networkRouteAllowed(p.Remote) {
+				continue
+			}
 			matches = append(matches, p)
 		}
 	}
@@ -865,6 +889,9 @@ func (b *broker) status(id string) (any, error) {
 	return object{"message": m, "events": events, "timing": messageTiming(m, events), "current_snapshot": snapshot, "delivery_evidence": deliveryEvidence(m.State), "acknowledged": m.State == "acknowledged", "task_completion": "unknown"}, nil
 }
 func safe(p *peer) bool {
+	if p.Remote != nil {
+		return p.Permission == "network"
+	}
 	if p.Host == "pi" && p.Permission == "native" {
 		// Pi has no built-in approval mode. Its configured extensions and
 		// execution environment retain control over all native tool calls.
@@ -882,6 +909,10 @@ func safe(p *peer) bool {
 	return false
 }
 func (b *broker) send(p *peer, target, parent, text, key string, ttl int, method string, structured ...json.RawMessage) (any, error) {
+	return b.sendImported(p, target, parent, text, key, ttl, method, nil, structured...)
+}
+
+func (b *broker) sendImported(p *peer, target, parent, text, key string, ttl int, method string, incoming *networkImport, structured ...json.RawMessage) (any, error) {
 	var provenance, data json.RawMessage
 	if len(structured) > 0 {
 		provenance = structured[0]
@@ -918,6 +949,9 @@ func (b *broker) send(p *peer, target, parent, text, key string, ttl int, method
 		}
 		hash = digest(string(raw(hashInputs)))
 	}
+	if incoming != nil {
+		hash = incoming.Hash
+	}
 	var existing, prior string
 	e := b.db.QueryRow("SELECT id,request_hash FROM messages WHERE sender=? AND client_id=?", p.ID, key).Scan(&existing, &prior)
 	if e == nil {
@@ -933,6 +967,10 @@ func (b *broker) send(p *peer, target, parent, text, key string, ttl int, method
 	if e != sql.ErrNoRows {
 		return nil, e
 	}
+	if incoming != nil && incoming.Expires <= time.Now().UnixMilli() {
+		return nil, errors.New("remote message has expired")
+	}
+	var networkParent *Message
 	var to *peer
 	depth := 0
 	resendOf, thread := "", ""
@@ -968,7 +1006,15 @@ func (b *broker) send(p *peer, target, parent, text, key string, ttl int, method
 		if (reply && m.Recipient != p.ID) || (followup && m.Sender.ID != p.ID) {
 			return nil, errors.New("only the recipient may reply; only the sender may follow up")
 		}
-		if (reply && m.State == "queued") || m.State == "expired" || m.State == "refused" || m.State == "abandoned" {
+		networkReply := reply && incoming != nil && incoming.ParentRemoteID != "" && p.Remote != nil
+		if networkReply {
+			if m.RemoteMessageID != "" && m.RemoteMessageID != incoming.ParentRemoteID {
+				return nil, errors.New("reply conflicts with its parent's network acceptance")
+			}
+			m.RemoteMessageID = incoming.ParentRemoteID
+			networkParent = &m
+		}
+		if (reply && m.State == "queued" && !networkReply) || m.State == "expired" || m.State == "refused" || m.State == "abandoned" {
 			return nil, errors.New("message is not eligible for a reply or follow-up")
 		}
 		targetID := m.Sender.ID
@@ -1004,6 +1050,9 @@ func (b *broker) send(p *peer, target, parent, text, key string, ttl int, method
 	}
 	if to == nil || to.ID == p.ID {
 		return nil, errors.New("invalid recipient")
+	}
+	if to.Remote != nil && (p.Remote != nil || !b.networkRouteAllowed(to.Remote)) {
+		return nil, errors.New("remote route is not authorized; transitive forwarding is not supported")
 	}
 	if to.Policy == "refuse" {
 		return nil, errors.New("recipient refuses messages")
@@ -1053,6 +1102,10 @@ func (b *broker) send(p *peer, target, parent, text, key string, ttl int, method
 		thread = id
 	}
 	m := Message{ID: id, Thread: thread, Sender: p.Agent, Recipient: to.ID, Text: text, Provenance: provenance, Data: data, Parent: parent, ResendOf: resendOf, Seq: seq, Created: now.UnixMilli(), Expires: now.Add(time.Duration(ttl) * time.Second).UnixMilli(), Depth: depth, State: "queued"}
+	if incoming != nil {
+		m.Expires = incoming.Expires
+		m.NetworkOrigin = &incoming.Origin
+	}
 	m.QueuedContext = &deliveryContext{BrokerVersion: Version, RecipientHost: to.Host, RecipientState: agentSnapshot(to).State, SenderState: agentSnapshot(p).State}
 	if _, e = tx.Exec("INSERT INTO messages VALUES(?,?,?,?,?,?,?,?,?,?)", m.ID, p.ID, to.ID, key, hash, seq, m.State, string(raw(m)), m.Created, m.Expires); e != nil {
 		return nil, e
@@ -1063,6 +1116,12 @@ func (b *broker) send(p *peer, target, parent, text, key string, ttl int, method
 		}
 	}
 	if reply {
+		if networkParent != nil {
+			networkParent.State = "acknowledged"
+			if _, e = tx.Exec("UPDATE messages SET data=? WHERE id=?", string(raw(networkParent)), parent); e != nil {
+				return nil, e
+			}
+		}
 		if _, e = tx.Exec("UPDATE messages SET state='acknowledged' WHERE id=?", parent); e != nil {
 			return nil, e
 		}
@@ -1120,7 +1179,7 @@ func (b *broker) dispatch() {
 			if e != nil {
 				break
 			}
-			if !externalHandoff(p, m) {
+			if !externalHandoff(p, m) || !b.networkHandoffAllowed(m, p) {
 				break
 			}
 			sender, e := b.messagePeer(b.db, m.Sender.ID)

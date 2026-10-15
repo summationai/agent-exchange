@@ -16,7 +16,7 @@ import (
 )
 
 func networkCLI(ctx context.Context, dir string, args []string, in io.Reader, out io.Writer) error {
-	usage := errors.New("usage: ax network init NAME [PORT] | identity | trust ALIAS FILE [AGENT...] | revoke ALIAS | serve | agents ALIAS")
+	usage := errors.New("usage: ax network init NAME [PORT] | identity | trust ALIAS FILE [AGENT...] | messaging ALIAS on|off | revoke ALIAS | serve | agents ALIAS")
 	if len(args) == 0 {
 		return usage
 	}
@@ -72,6 +72,11 @@ func networkCLI(ctx context.Context, dir string, args []string, in io.Reader, ou
 		}
 		_, err = fmt.Fprintf(out, "Paired %s, certificate SHA256 %s. Discovery only.\n", args[1], networkFingerprint(card))
 		return err
+	case "messaging":
+		if len(args) != 3 || (args[2] != "on" && args[2] != "off") {
+			return usage
+		}
+		return setNetworkMessaging(dir, args[1], args[2] == "on")
 	case "revoke":
 		if len(args) != 2 {
 			return usage

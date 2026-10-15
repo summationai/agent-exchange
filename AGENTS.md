@@ -71,7 +71,7 @@ Download the installer first to inspect it or select a release:
 
 ```sh
 curl -fsSL https://useax.dev/install.sh -o install-ax.sh
-AX_VERSION=v0.7.1 sh install-ax.sh
+AX_VERSION=v0.7.2 sh install-ax.sh
 ```
 
 `AX_INSTALL_DIR` chooses another binary directory. `AX_NO_MODIFY_PATH=1` disables changes to shell configuration. Set these variables on the `sh install-ax.sh` invocation. With a custom directory, add that directory to PATH before running AX.

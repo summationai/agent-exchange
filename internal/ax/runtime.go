@@ -38,6 +38,16 @@ type Session struct {
 	SpawnToken    string          `json:"spawn_token,omitempty"`
 }
 
+// A named endpoint keeps its explicit AX opt-in across resume. A present
+// environment setting replaces the saved choice; native bypass flags still
+// opt in as they do on a new launch.
+func bypassOptIn(saved, explicit bool) bool {
+	if value, set := os.LookupEnv("AX_ALLOW_BYPASS"); set {
+		return explicit || value == "1"
+	}
+	return explicit || saved
+}
+
 func randomID(prefix string) string {
 	b := make([]byte, 16)
 	if _, e := rand.Read(b); e != nil {

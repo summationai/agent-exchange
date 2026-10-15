@@ -106,12 +106,12 @@ func launch(ctx context.Context, dir, host string, args []string, spawnToken str
 			return e
 		}
 	}
-	if host == "grok" {
+	if host == "grok" || host == "claude" {
 		for i, arg := range nativeArgs {
 			if arg == "--" {
 				break
 			}
-			if arg == "--always-approve" || arg == "--yolo" || arg == "--dangerously-skip-permissions" || arg == "--permission-mode=bypassPermissions" || (arg == "--permission-mode" && i+1 < len(nativeArgs) && nativeArgs[i+1] == "bypassPermissions") {
+			if (host == "grok" && (arg == "--always-approve" || arg == "--yolo")) || arg == "--dangerously-skip-permissions" || arg == "--permission-mode=bypassPermissions" || (arg == "--permission-mode" && i+1 < len(nativeArgs) && nativeArgs[i+1] == "bypassPermissions") {
 				bypass = true
 			}
 		}

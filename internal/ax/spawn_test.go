@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -368,5 +369,96 @@ func TestDetectTerminalPrefersTmuxAndDoesNotFallback(t *testing.T) {
 	t.Setenv("TMUX_PANE", "")
 	if got := detectTerminal(); got.Kind != "" {
 		t.Fatalf("fell back from incomplete tmux context: %+v", got)
+	}
+}
+
+func TestSpawnRunnerExplicitClaudeBypassOptIn(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		args  []string
+		allow bool
+	}{
+		{"permission_mode", []string{"--permission-mode", "bypassPermissions"}, true},
+		{"permission_mode_equals", []string{"--permission-mode=bypassPermissions"}, true},
+		{"skip_permissions", []string{"--dangerously-skip-permissions"}, true},
+		{"ordinary", nil, false},
+		{"default_mode", []string{"--permission-mode", "default"}, false},
+		{"allow_option_only", []string{"--allow-dangerously-skip-permissions"}, false},
+		{"after_separator", []string{"--", "--permission-mode", "bypassPermissions"}, false},
+		{"grok_option", []string{"--yolo"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir, parent := spawnFixture(t)
+			t.Setenv("AX_ALLOW_BYPASS", "1") // The parent setting must still be stripped.
+			t.Setenv("AX_SESSION_FILE", "parent-session")
+			t.Setenv("CLAUDECODE", "1")
+			argsPath := filepath.Join(parent.Workspace, "child-args")
+			script := "#!/bin/sh\nprintf '%s\\0' \"$@\" > " + shellQuote(argsPath) + "\n"
+			if err := os.WriteFile(filepath.Join(parent.Workspace, "claude"), []byte(script), 0700); err != nil {
+				t.Fatal(err)
+			}
+			open := func(context.Context, terminalContext, string, string, string) (string, error) {
+				return "", errors.New("test pane reservation")
+			}
+			if _, err := spawnAgent(context.Background(), dir, parent, spawnRequest{Host: "claude", Name: "worker", Args: tc.args}, open); err != nil {
+				t.Fatal(err)
+			}
+			var record spawnRecord
+			if err := readPrivateJSON(spawnPath(dir, "worker"), &record); err != nil {
+				t.Fatal(err)
+			}
+			cwd, err := os.Getwd()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer os.Chdir(cwd)
+			if err = runSpawn(context.Background(), dir, "worker", record.Token); err != nil {
+				t.Fatal(err)
+			}
+			child, err := loadSession(filepath.Join(dir, "sessions", "worker.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if child.AllowBypass != tc.allow {
+				t.Fatalf("AX opt-in=%t, want %t", child.AllowBypass, tc.allow)
+			}
+			observed, err := os.ReadFile(argsPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			actual := strings.Split(string(observed), "\x00")
+			prefix := len(tc.args)
+			if i := slices.Index(tc.args, "--"); i >= 0 {
+				prefix = i
+				tail := actual[len(actual)-1-(len(tc.args)-i) : len(actual)-1]
+				if !reflect.DeepEqual(tail, tc.args[i:]) {
+					t.Fatal("changed arguments after the native separator")
+				}
+			}
+			if !reflect.DeepEqual(actual[:prefix], append([]string{}, tc.args[:prefix]...)) {
+				t.Fatal("changed native permission arguments")
+			}
+			admin, err := dial(socketPath(dir))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer admin.close()
+			var agents []Agent
+			if err = admin.call("ax.inspect", object{}, &agents); err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, agent := range agents {
+				if agent.ID == child.ID {
+					found = true
+					if agent.AllowBypass != tc.allow {
+						t.Fatal("broker did not receive child's explicit consent")
+					}
+				}
+			}
+			if !found {
+				t.Fatal("child was not enrolled")
+			}
+		})
 	}
 }

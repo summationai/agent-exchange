@@ -86,8 +86,14 @@ func discoverNetworkClient(ctx context.Context, client *http.Client, card networ
 	defer res.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(res.Body, maxFrame+1))
 	var out networkDiscovery
-	if err != nil || res.StatusCode != http.StatusOK || len(data) > maxFrame || json.Unmarshal(data, &out) != nil || out.Protocol != networkProtocol || out.Machine != card.Name || len(out.Agents) > 64 {
+	if err != nil || res.StatusCode != http.StatusOK || len(data) > maxFrame || json.Unmarshal(data, &out) != nil || out.Protocol != networkProtocol || out.Machine != card.Name || len(out.Agents) > 256 {
 		return out, errors.New("invalid network discovery response")
+	}
+	// Older development servers advertised the full local endpoint set. Treat
+	// cache overflow as partial discovery, not a connectivity failure.
+	if len(out.Agents) > networkDiscoveryLimit {
+		out.Agents = out.Agents[:networkDiscoveryLimit]
+		out.Truncated = true
 	}
 	return out, nil
 }

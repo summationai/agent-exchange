@@ -34,6 +34,7 @@ import (
 
 const networkProtocol = "ax-network/1"
 const networkConfigLimit = 256 << 10
+const networkDiscoveryLimit = 64
 const networkAgentsPath = "/ax/network/v1/agents"
 
 type networkCard struct {
@@ -58,9 +59,10 @@ type networkAgent struct {
 	State string `json:"state"`
 }
 type networkDiscovery struct {
-	Protocol string         `json:"protocol"`
-	Machine  string         `json:"machine"`
-	Agents   []networkAgent `json:"agents"`
+	Truncated bool           `json:"truncated,omitempty"`
+	Protocol  string         `json:"protocol"`
+	Machine   string         `json:"machine"`
+	Agents    []networkAgent `json:"agents"`
 }
 
 func tailnetIP(ip netip.Addr) bool {
@@ -336,6 +338,10 @@ func networkHandler(dir string, identity networkCard) http.Handler {
 		out := networkDiscovery{Protocol: networkProtocol, Machine: identity.Name, Agents: []networkAgent{}}
 		for _, agent := range agents {
 			if agent.Remote == nil && (slices.Contains(peer.Exports, "*") || slices.Contains(peer.Exports, agent.Name)) {
+				if len(out.Agents) == networkDiscoveryLimit {
+					out.Truncated = true
+					continue
+				}
 				out.Agents = append(out.Agents, networkAgent{ID: agent.ID, Name: agent.Name, Host: agent.Host, State: agent.State})
 			}
 		}
@@ -402,22 +408,5 @@ func discoverNetwork(ctx context.Context, dir, alias string) (networkDiscovery, 
 		return networkDiscovery{}, err
 	}
 	defer client.CloseIdleConnections()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, peer.Card.Address+networkAgentsPath, nil)
-	if err != nil {
-		return networkDiscovery{}, err
-	}
-	res, err := client.Do(req)
-	if err != nil {
-		return networkDiscovery{}, err
-	}
-	defer res.Body.Close()
-	if res.StatusCode != http.StatusOK {
-		return networkDiscovery{}, fmt.Errorf("peer discovery returned HTTP %d", res.StatusCode)
-	}
-	data, err := io.ReadAll(io.LimitReader(res.Body, maxFrame+1))
-	var out networkDiscovery
-	if err != nil || len(data) > maxFrame || json.Unmarshal(data, &out) != nil || out.Protocol != networkProtocol || out.Machine != peer.Card.Name || len(out.Agents) > 256 {
-		return out, errors.New("invalid AX network discovery response")
-	}
-	return out, nil
+	return discoverNetworkClient(ctx, client, peer.Card)
 }

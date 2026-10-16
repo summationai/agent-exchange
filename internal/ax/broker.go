@@ -982,6 +982,9 @@ func (b *broker) sendImported(p *peer, target, parent, text, key string, ttl int
 	if e != sql.ErrNoRows {
 		return nil, e
 	}
+	if p.Host == "external" && p.Remote == nil && !safe(p) {
+		return nil, errors.New("attached sender has no approved permission mode; configure its native permission mode with -p, or use ax attach --relay for an automated bridge. No message was queued")
+	}
 	if incoming != nil && incoming.Expires <= time.Now().UnixMilli() {
 		return nil, errors.New("remote message has expired")
 	}

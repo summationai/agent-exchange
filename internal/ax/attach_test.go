@@ -374,3 +374,39 @@ func TestAttachedCLIExitsWhileStdinIsIdle(t *testing.T) {
 		t.Fatal("SIGTERM left MCP child blocked on stdin")
 	}
 }
+
+func TestUnconfiguredAttachmentCannotQueueMail(t *testing.T) {
+	dir := startTestServer(t)
+	recipient := startAttachedMCP(t, dir, "-n", "receiver", "-s", "receiver", "-p", "default")
+	if err := recipient.call(t, "list_agents", object{}, nil); err != "" {
+		t.Fatal(err)
+	}
+	sender := startAttachedMCP(t, dir, "-n", "watcher", "-s", "watcher")
+	err := sender.call(t, "send_message", object{"target": "receiver", "text": "alert", "client_message_id": "alert"}, nil)
+	if !strings.Contains(err, "No message was queued") {
+		t.Fatalf("unconfigured sender did not fail before storage: %s", err)
+	}
+	var pending pendingPage
+	if err := recipient.call(t, "list_pending", object{}, &pending); err != "" || len(pending.Messages) != 0 {
+		t.Fatalf("unconfigured sender left a FIFO barrier: %+v %s", pending, err)
+	}
+}
+
+func TestUnconfiguredAttachmentRetryKeepsExistingReceipt(t *testing.T) {
+	b, _ := localBroker(t)
+	_, sender, _ := endpoint(t, b, "watcher", testMesh)
+	_, _, _ = endpoint(t, b, "receiver", testMesh)
+	p := b.peers[sender.agent]
+	p.Host, p.Permission = "external", "default"
+	args := object{"target": "receiver", "text": "alert", "client_message_id": "alert"}
+	first := request(t, b, sender, "ax.send", args).(Message)
+	p.Permission = "unknown"
+	again := request(t, b, sender, "ax.send", args).(Message)
+	if again.ID != first.ID {
+		t.Fatal("permission change lost the original committed receipt")
+	}
+	args["client_message_id"] = "new_alert"
+	if _, err := b.request(sender, "ax.send", raw(args)); err == nil {
+		t.Fatal("unconfigured attachment queued new mail")
+	}
+}

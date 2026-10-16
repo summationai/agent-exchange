@@ -376,19 +376,24 @@ func TestAttachedCLIExitsWhileStdinIsIdle(t *testing.T) {
 }
 
 func TestUnconfiguredAttachmentCannotQueueMail(t *testing.T) {
-	dir := startTestServer(t)
-	recipient := startAttachedMCP(t, dir, "-n", "receiver", "-s", "receiver", "-p", "default")
-	if err := recipient.call(t, "list_agents", object{}, nil); err != "" {
-		t.Fatal(err)
-	}
-	sender := startAttachedMCP(t, dir, "-n", "watcher", "-s", "watcher")
-	err := sender.call(t, "send_message", object{"target": "receiver", "text": "alert", "client_message_id": "alert"}, nil)
-	if !strings.Contains(err, "No message was queued") {
-		t.Fatalf("unconfigured sender did not fail before storage: %s", err)
-	}
-	var pending pendingPage
-	if err := recipient.call(t, "list_pending", object{}, &pending); err != "" || len(pending.Messages) != 0 {
-		t.Fatalf("unconfigured sender left a FIFO barrier: %+v %s", pending, err)
+	for _, optIn := range []string{"0", "1"} {
+		t.Run(optIn, func(t *testing.T) {
+			t.Setenv("AX_ALLOW_BYPASS", optIn)
+			dir := startTestServer(t)
+			recipient := startAttachedMCP(t, dir, "-n", "receiver", "-s", "receiver", "-p", "default")
+			if err := recipient.call(t, "list_agents", object{}, nil); err != "" {
+				t.Fatal(err)
+			}
+			sender := startAttachedMCP(t, dir, "-n", "watcher", "-s", "watcher")
+			err := sender.call(t, "send_message", object{"target": "receiver", "text": "alert", "client_message_id": "alert"}, nil)
+			if !strings.Contains(err, "No message was queued") {
+				t.Fatalf("unconfigured sender did not fail before storage: %s", err)
+			}
+			var pending pendingPage
+			if err := recipient.call(t, "list_pending", object{}, &pending); err != "" || len(pending.Messages) != 0 {
+				t.Fatalf("unconfigured sender left a FIFO barrier: %+v %s", pending, err)
+			}
+		})
 	}
 }
 
@@ -408,5 +413,22 @@ func TestUnconfiguredAttachmentRetryKeepsExistingReceipt(t *testing.T) {
 	args["client_message_id"] = "new_alert"
 	if _, err := b.request(sender, "ax.send", raw(args)); err == nil {
 		t.Fatal("unconfigured attachment queued new mail")
+	}
+}
+
+func TestConfiguredAttachmentRetainsExplicitBypassOptIn(t *testing.T) {
+	t.Setenv("AX_ALLOW_BYPASS", "1")
+	dir := startTestServer(t)
+	recipient := startAttachedMCP(t, dir, "-n", "receiver", "-s", "receiver", "-p", "default")
+	if err := recipient.call(t, "list_agents", object{}, nil); err != "" {
+		t.Fatal(err)
+	}
+	sender := startAttachedMCP(t, dir, "-n", "configured", "-s", "configured", "-p", "bypassPermissions")
+	if err := sender.call(t, "send_message", object{"target": "receiver", "text": "task", "client_message_id": "task"}, nil); err != "" {
+		t.Fatalf("known permission mode lost explicit opt-in: %s", err)
+	}
+	var pending pendingPage
+	if err := recipient.call(t, "list_pending", object{}, &pending); err != "" || len(pending.Messages) != 1 {
+		t.Fatalf("configured attachment did not queue: %+v %s", pending, err)
 	}
 }

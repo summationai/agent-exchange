@@ -389,9 +389,6 @@ func TestHumanRecoveryUnblocksWithoutDuplicateDelivery(t *testing.T) {
 	_, to, wire := endpoint(t, b, "api", testMesh)
 	first := request(t, b, from, "ax.send", object{"target": "api", "text": "uncertain", "client_message_id": "uncertain"}).(Message)
 	second := request(t, b, from, "ax.send", object{"target": "api", "text": "next", "client_message_id": "next"}).(Message)
-	if _, e := b.request(&serverConn{}, "ax.abandon", raw(object{"mesh": testMesh, "message_id": first.ID})); e == nil {
-		t.Fatal("recovery dropped mail before handoff")
-	}
 	if e := b.event(first.ID, "delivery_uncertain", to.epoch); e != nil {
 		t.Fatal(e)
 	}
@@ -503,5 +500,44 @@ func TestEnrollRefreshesMeshAfterMove(t *testing.T) {
 	defer reopened.db.Close()
 	if got := reopened.peers[s.ID].Mesh; got != moved.Mesh {
 		t.Fatalf("refreshed mesh did not persist: %q", got)
+	}
+}
+
+func TestOwnerAbandonsQueuedPermissionBlockedHead(t *testing.T) {
+	b, _ := localBroker(t)
+	_, blocked, _ := endpoint(t, b, "watcher", testMesh)
+	_, sender, _ := endpoint(t, b, "web", testMesh)
+	_, recipient, wire := endpoint(t, b, "api", testMesh)
+	request(t, b, blocked, "ax.presence", object{"permission_mode": "unknown", "state": "ready"})
+	first := request(t, b, blocked, "ax.send", object{"target": "api", "text": "synthetic alert", "client_message_id": "alert"}).(Message)
+	second := request(t, b, sender, "ax.send", object{"target": "api", "text": "real task", "client_message_id": "task"}).(Message)
+	b.dispatch() // The unknown sender holds the FIFO head.
+	for _, connection := range []*serverConn{blocked, sender, recipient} {
+		if _, err := b.request(connection, "ax.abandon", raw(object{"message_id": first.ID})); err == nil {
+			t.Fatal("bound endpoint acquired owner cancellation")
+		}
+	}
+	request(t, b, &serverConn{}, "ax.abandon", object{"message_id": first.ID})
+	saved, err := b.message(first.ID)
+	if err != nil || saved.State != "abandoned" || saved.Text != first.Text {
+		t.Fatalf("cancellation lost history or claimed delivery: %+v %v", saved, err)
+	}
+	if safe(b.peers[blocked.agent]) {
+		t.Fatal("owner cancellation changed sender permissions")
+	}
+	delivered := make(chan packet, 1)
+	go func() { p, _ := readFrame(wire); delivered <- p }()
+	b.dispatch()
+	select {
+	case p := <-delivered:
+		var m Message
+		if err := json.Unmarshal(p.Params, &m); err != nil || m.ID != second.ID {
+			t.Fatalf("did not deliver original real task: %+v %v", m, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("owner cancellation did not release FIFO")
+	}
+	if _, err := b.request(&serverConn{}, "ax.abandon", raw(object{"message_id": first.ID})); err == nil {
+		t.Fatal("abandoned message was not terminal")
 	}
 }

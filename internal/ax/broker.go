@@ -621,14 +621,13 @@ func (b *broker) request(c *serverConn, method string, params json.RawMessage) (
 		if m.State == "acknowledged" || m.State == "expired" || m.State == "refused" || m.State == "abandoned" {
 			return nil, errors.New("message is already terminal")
 		}
-		if m.State == "queued" {
-			return nil, errors.New("message has not been handed off; queued mail cannot be abandoned by recovery")
-		}
-		// A human can release a stuck FIFO head without claiming receipt or
-		// repeating a potentially successful host injection.
+		// The owner can abandon automatic delivery and release the FIFO head.
+		// This cannot recall network I/O already in flight, even when its
+		// source row is still queued. Later acceptance evidence is retained.
 		if e = b.event(m.ID, "abandoned", 0); e != nil {
 			return nil, e
 		}
+		b.networkChanged()
 		return b.status(m.ID)
 	}
 	if c.agent == "" && method == "ax.policy" {

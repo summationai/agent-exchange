@@ -30,6 +30,7 @@ type Session struct {
 	Native           string          `json:"native_session_id"`
 	NativeFile       string          `json:"native_session_file,omitempty"`
 	ClaudePending    string          `json:"claude_pending_transcript,omitempty"`
+	ClaudeStartup    bool            `json:"claude_startup_pending,omitempty"`
 	Started          bool            `json:"started"`
 	BindingError     string          `json:"binding_error,omitempty"`
 	AllowBypass      bool            `json:"allow_bypass"`

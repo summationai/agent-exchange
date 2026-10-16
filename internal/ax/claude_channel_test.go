@@ -1,6 +1,7 @@
 package ax
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Claude can drop channel opt-in when agent view re-hosts a conversation.
@@ -69,5 +71,98 @@ func TestClaudeLaunchKeepsChannelInForeground(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// Tool discovery happens before Claude's first model turn. A spawned peer must
+// not consume its first queued task until its fixed startup turn calls AX.
+func TestClaudeSpawnWaitsForStartupToolCall(t *testing.T) {
+	dir := startTestServer(t)
+	s := Session{ID: randomID("agt_"), Secret: randomID(""), Name: "worker", Host: "claude", Mesh: testMesh, Native: uuid(), Started: true, ClaudeStartup: true}
+	file := filepath.Join(dir, "session.json")
+	if err := saveSession(file, s); err != nil {
+		t.Fatal(err)
+	}
+	c, err := dial(socketPath(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.close()
+	for _, step := range []struct {
+		method string
+		args   any
+	}{
+		{"ax.enroll", s}, {"ax.connect", object{"version": "1", "agent_id": s.ID, "secret": s.Secret}},
+		{"ax.presence", object{"native_session_id": s.Native, "permission_mode": "default", "state": "ready"}},
+	} {
+		if err := c.call(step.method, step.args, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sender := connectDiscoveryPeer(t, dir, Session{ID: randomID("agt_"), Secret: randomID(""), Name: "coordinator", Host: "codex", Mesh: testMesh, Native: uuid()})
+	var sent Message
+	if err := sender.call("ax.send", object{"target": "worker", "text": "first task", "client_message_id": "first"}, &sent); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	b := &bridge{session: s, file: file, dir: dir, c: c, ctx: context.Background(), out: &out, toolsListed: true}
+	b.bootstrap()
+	if b.active || out.Len() != 0 {
+		t.Fatal("MCP discovery released mail before the startup turn")
+	}
+	var status struct{ Message Message }
+	if err := sender.call("ax.status", object{"message_id": sent.ID}, &status); err != nil {
+		t.Fatal(err)
+	}
+	if status.Message.State != "queued" {
+		t.Fatal("first task was offered too early")
+	}
+	if err := b.toolCall(context.Background(), nil, "ax.list", object{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case offer := <-c.offers:
+		if offer.ID != sent.ID {
+			t.Fatal("wrong first task")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("startup tool call did not release the first task")
+	}
+	saved, err := loadSession(file)
+	if err != nil || saved.ClaudeStartup {
+		t.Fatal("startup barrier was not durably cleared")
+	}
+	b.bootstrap()
+	select {
+	case <-c.offers:
+		t.Fatal("bootstrap replayed the first task")
+	default:
+	}
+	// A replacement bridge resumes discovery activation, with no second setup turn.
+	b.active, b.bootstrapped = false, false
+	b.bootstrap()
+	if !b.active || out.Len() != 0 {
+		t.Fatal("reconnect required another startup turn")
+	}
+}
+
+func TestClaudeStartupPreservesNativePrompts(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want bool
+	}{
+		{nil, true}, {[]string{"--exclude-dynamic-system-prompt-sections"}, true},
+		{[]string{"--bare"}, false}, {[]string{"--safe-mode"}, false}, {[]string{"--permission-mode", "bypassPermissions"}, true},
+		{[]string{"--model", "sonnet", "--effort=high"}, true},
+		{[]string{"--mcp-config", "config.json", "--allowedTools", "Read", "Bash"}, true},
+		{[]string{"--"}, true}, {[]string{"--", "native prompt"}, false},
+		{[]string{"native prompt"}, false}, {[]string{"--model", "sonnet", "native prompt"}, false},
+		{[]string{"--resume"}, false}, {[]string{"-r", "saved"}, false},
+		{[]string{"--print"}, false}, {[]string{"--help"}, false},
+		{[]string{"--future-option", "value"}, false}, {[]string{"--model"}, false},
+	} {
+		if got := claudeNeedsStartup(tc.args); got != tc.want {
+			t.Fatalf("%q: seed=%v want=%v", tc.args, got, tc.want)
+		}
 	}
 }

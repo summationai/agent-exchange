@@ -296,3 +296,53 @@ func TestNetworkRevocationWithholdsOfferedHistory(t *testing.T) {
 		})
 	}
 }
+
+func TestOwnerAbandonsBlockedRemoteOutboxHead(t *testing.T) {
+	a, b := pairedNetworkBrokers(t)
+	_, blocked, _ := endpoint(t, a, "watcher", testMesh)
+	_, sender, _ := endpoint(t, a, "web", testMesh)
+	api, _, _ := endpoint(t, b, "api", testMesh)
+	request(t, a, &serverConn{}, "ax.network.sync", object{"alias": "buildbox", "agents": []networkAgent{{ID: api.ID, Name: "api", Host: "codex", State: "ready"}}})
+	request(t, a, blocked, "ax.presence", object{"permission_mode": "unknown", "state": "ready"})
+	first := request(t, a, blocked, "ax.send", object{"target": "api@buildbox", "text": "synthetic alert", "client_message_id": "alert"}).(Message)
+	second := request(t, a, sender, "ax.send", object{"target": "api@buildbox", "text": "real task", "client_message_id": "task"}).(Message)
+	if envelope, err := a.networkOutbox("buildbox"); err != nil || envelope != nil {
+		t.Fatalf("held sender did not block FIFO: %+v %v", envelope, err)
+	}
+	a.networkWatcher = &serverConn{networkWake: make(chan struct{}, 1)}
+	request(t, a, &serverConn{}, "ax.abandon", object{"message_id": first.ID})
+	select {
+	case <-a.networkWatcher.networkWake:
+	default:
+		t.Fatal("abandonment did not wake remote delivery")
+	}
+	envelope, err := a.networkOutbox("buildbox")
+	if err != nil || envelope == nil || envelope.ID != second.ID {
+		t.Fatalf("original queued task did not resume: %+v %v", envelope, err)
+	}
+	if safe(a.peers[blocked.agent]) {
+		t.Fatal("abandonment authorized the held sender")
+	}
+}
+
+func TestQueuedRemoteAbandonmentRetainsInflightAcceptance(t *testing.T) {
+	a, b := pairedNetworkBrokers(t)
+	_, sender, _ := endpoint(t, a, "web", testMesh)
+	api, _, _ := endpoint(t, b, "api", testMesh)
+	request(t, a, &serverConn{}, "ax.network.sync", object{"alias": "buildbox", "agents": []networkAgent{{ID: api.ID, Name: "api", Host: "codex", State: "ready"}}})
+	m := request(t, a, sender, "ax.send", object{"target": "api@buildbox", "text": "task", "client_message_id": "task"}).(Message)
+	envelope, err := a.networkOutbox("buildbox")
+	if err != nil || envelope == nil {
+		t.Fatal("missing in-flight envelope", err)
+	}
+	request(t, a, &serverConn{}, "ax.abandon", object{"message_id": m.ID})
+	accepted := request(t, b, &serverConn{}, "ax.network.receive", object{"alias": "laptop", "envelope": envelope}).(Message)
+	request(t, a, &serverConn{}, "ax.network.accepted", object{"alias": "buildbox", "message_id": m.ID, "remote_message_id": accepted.ID})
+	saved, err := a.message(m.ID)
+	if err != nil || saved.State != "abandoned" || saved.RemoteMessageID != accepted.ID {
+		t.Fatalf("lost late acceptance evidence: %+v %v", saved, err)
+	}
+	if next, err := a.networkOutbox("buildbox"); err != nil || next != nil {
+		t.Fatalf("abandoned attempt was retried: %+v %v", next, err)
+	}
+}

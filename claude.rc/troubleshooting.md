@@ -100,7 +100,7 @@ Inspect its status and the recipient’s conversation first. If you deliberately
 ax resolve MESSAGE_ID abandon
 ```
 
-Abandonment releases the queue. It does not cancel work the harness already accepted and does not claim the message was delivered.
+Abandonment releases the queue and preserves the message history. The owner can also abandon obsolete queued mail that blocks later messages. This stops future automatic attempts; it does not recall a network request already in flight or work a harness already accepted. A remote message can still appear queued while transfer is in progress, so abandonment is not proof that it never reached the other machine. Later remote acceptance remains recorded. Agent tools cannot abandon messages; inspect the exact message before using this command.
 
 ## After an update
 

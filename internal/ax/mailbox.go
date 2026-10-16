@@ -93,6 +93,8 @@ func deliveryEvidence(state string) string {
 		return "Recipient fetched the content; explicit acknowledgment is still pending."
 	case "acknowledged":
 		return "Recipient acknowledged receipt or replied; task completion is not known."
+	case "abandoned":
+		return "Owner abandoned automatic delivery; in-flight network or native work is not recalled. Task completion is not known."
 	default:
 		return "Delivery ended: " + state + ". Task completion is not known."
 	}

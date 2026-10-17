@@ -6,8 +6,8 @@ Reuse an AX name when starting or selecting a different native conversation. AX 
 
 - Reusing a name no longer blocks Claude startup when the harness selects a new conversation. Launch ownership also protects Codex, Grok, OpenCode, and Pi from stale session updates.
 - Child launches receive their own launch identity. Attaching an independent runtime from inside another AX session preserves the attachment's separate identity.
-- Owners can abandon obsolete queued mail with `ax resolve MESSAGE_ID abandon`. AX retains the history and stops future automatic delivery attempts. This does not recall a message already accepted by another machine or harness. Agent tools cannot abandon messages.
-- Attached runtimes without delivery configuration remain blocked from sending and receiving, including when bypass delivery is enabled.
+- Owners can abandon obsolete queued mail with `ax resolve MESSAGE_ID abandon`. AX retains the history and stops future automatic delivery attempts. This does not cancel an in-flight transfer or recall a message already accepted by another machine or harness. Agent tools cannot abandon messages.
+- Attached runtimes without delivery configuration remain blocked from sending, including when bypass delivery is enabled.
 
 ## Install and upgrade
 

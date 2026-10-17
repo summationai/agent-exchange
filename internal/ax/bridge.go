@@ -501,7 +501,7 @@ func runBridge(ctx context.Context, dir, file string, in io.Reader, out io.Write
 	if e != nil {
 		return e
 	}
-	if expected := os.Getenv("AX_LAUNCH_ID"); expected != s.LaunchID {
+	if expected := os.Getenv("AX_LAUNCH_ID"); s.Host != "external" && expected != s.LaunchID {
 		return errors.New("AX bridge belongs to an earlier launch")
 	}
 	ctx, cancel := context.WithCancel(ctx)

@@ -90,6 +90,8 @@ func (m *attachedMCP) call(t *testing.T, name string, args object, result any) s
 }
 
 func TestAttachedManualRuntimeAndNativePeerRoundTrip(t *testing.T) {
+	// Attachments created from an AX agent inherit its launch environment.
+	t.Setenv("AX_LAUNCH_ID", "parent_launch")
 	dir := startTestServer(t)
 	m := startAttachedMCP(t, dir, "-n", "planner", "-s", "conversation_1", "-p", "default")
 	var discovered struct {

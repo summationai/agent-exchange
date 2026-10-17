@@ -91,7 +91,7 @@ export default function ax(pi) {
     try {
       const saved = JSON.parse(await readFile(options.sessionFile, 'utf8'));
       if (!isCurrent(session)) return;
-      if (saved.native_session_id && saved.native_session_id !== session.id) {
+      if (saved.native_session_id && saved.native_session_id !== session.id && (saved.started || !saved.launch_id)) {
         status('AX name belongs to another conversation; launch with a new AX name');
         return;
       }

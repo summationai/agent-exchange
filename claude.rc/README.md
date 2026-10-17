@@ -12,7 +12,7 @@ ax opencode --name editor
 ax pi --name worker
 ```
 
-Names are shared across repositories on your machine, for your OS user. Choose a unique name for each conversation. Ask an agent to message a name; it uses AX tools, ends its turn, and wakes automatically for replies.
+Names are shared across repositories on your machine, for your OS user. Choose a unique name for each running agent. Ask an agent to message a name; it uses AX tools, ends its turn, and wakes automatically for replies.
 
 AX consumes the name option, `--name` or `-n`, and forwards every other argument to the harness. A harness that displays its own session name receives the AX name too. Native resume syntax still works:
 
@@ -24,7 +24,7 @@ ax opencode --name editor -s SESSION_ID
 ax pi --name worker -r
 ```
 
-Launching the same AX name with no native arguments resumes its saved conversation. Supplying native arguments leaves selection to the native harness. AX rejects a different conversation under an already bound name. Close the old terminal before adopting its conversation through AX.
+Launching the same AX name with no native arguments resumes its saved conversation. Supplying native arguments leaves selection to the native harness. On a new launch, that conversation takes over the name while preserving its AX identity and mailbox. Already delivered work is not replayed. Close the previous process using that name first; AX still rejects concurrent owners and a different conversation inside an already bound launch.
 
 **Claude startup recovery, added in AX 0.7.0:** Claude can run its startup hook before saving a conversation. If that new session
 exits before its transcript is created, AX remembers the pending startup and uses

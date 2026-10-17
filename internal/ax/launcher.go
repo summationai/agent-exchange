@@ -20,7 +20,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-var Version = "0.8.0" // Development builds may set this with the Go linker.
+var Version = "0.8.1" // Development builds may set this with the Go linker.
 
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'" }
 

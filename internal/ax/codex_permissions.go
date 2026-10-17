@@ -54,6 +54,10 @@ func codexBypassArgs(args []string) ([]string, bool, error) {
 // Only the TUI uses this private adapter. AX's queue and metadata connections go
 // directly to the backend. No peer message can select or change permissions.
 func codexSessionSocket(ctx context.Context, dir, file, remote string, bypass bool, startupErrors chan<- error) (string, func(), error) {
+	session, err := loadSession(file)
+	if err != nil {
+		return "", nil, err
+	}
 	path := filepath.Join(dir, randomID("permissions_")+".sock")
 	listener, err := net.Listen("unix", path)
 	if err != nil {
@@ -72,7 +76,7 @@ func codexSessionSocket(ctx context.Context, dir, file, remote string, bypass bo
 			case <-ctx.Done():
 				return
 			case event := <-events:
-				if err := Hook(dir, file, bytes.NewReader(event)); err != nil {
+				if err := Hook(dir, file, bytes.NewReader(event), session.LaunchID); err != nil {
 					select {
 					case startupErrors <- err:
 					default:

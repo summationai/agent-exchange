@@ -215,7 +215,7 @@ func TestFreshClaudeNameResumesOnlyAfterNativeBinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	native := uuid()
-	if err := Hook(dir, path, bytes.NewReader(raw(object{"session_id": native, "hook_event_name": "SessionStart", "permission_mode": "default"}))); err != nil {
+	if err := Hook(dir, path, bytes.NewReader(raw(object{"session_id": native, "hook_event_name": "SessionStart", "permission_mode": "default"})), mustSession(t, path).LaunchID); err != nil {
 		t.Fatal(err)
 	}
 	actual := launchArgs()
@@ -252,7 +252,7 @@ func TestClaudeUnwrittenConversationKeepsIdentity(t *testing.T) {
 			}
 			native, transcript := uuid(), filepath.Join(bin, "conversation.jsonl")
 			hook := object{"session_id": native, "hook_event_name": "SessionStart", "source": "startup", "transcript_path": transcript}
-			if err := Hook(dir, file, bytes.NewReader(raw(hook))); err != nil {
+			if err := Hook(dir, file, bytes.NewReader(raw(hook)), mustSession(t, file).LaunchID); err != nil {
 				t.Fatal(err)
 			}
 			for i := 0; i < 2; i++ {
@@ -275,7 +275,7 @@ func TestClaudeUnwrittenConversationKeepsIdentity(t *testing.T) {
 			}
 			if observeHook {
 				hook["hook_event_name"] = "Stop"
-				if err := Hook(dir, file, bytes.NewReader(raw(hook))); err != nil {
+				if err := Hook(dir, file, bytes.NewReader(raw(hook)), mustSession(t, file).LaunchID); err != nil {
 					t.Fatal(err)
 				}
 			} else {
@@ -323,7 +323,7 @@ func TestClaudePendingRequiresKnownNewMissingTranscript(t *testing.T) {
 				t.Fatal(err)
 			}
 			hook := object{"session_id": uuid(), "hook_event_name": "SessionStart", "source": tc.source, "transcript_path": tc.transcript}
-			if err := Hook(dir, file, bytes.NewReader(raw(hook))); err != nil {
+			if err := Hook(dir, file, bytes.NewReader(raw(hook)), mustSession(t, file).LaunchID); err != nil {
 				t.Fatal(err)
 			}
 			saved, err := loadSession(file)
@@ -352,7 +352,7 @@ func TestLifecycleBindsExistingSession(t *testing.T) {
 		}
 		id := uuid()
 		hook := object{"session_id": id, "hook_event_name": "SessionStart", "permission_mode": "default", "session_file": "/original repo/session.jsonl"}
-		if err = Hook(dir, file, bytes.NewReader(raw(hook))); err != nil {
+		if err = Hook(dir, file, bytes.NewReader(raw(hook)), mustSession(t, file).LaunchID); err != nil {
 			t.Fatal(err)
 		}
 		saved, err := loadSession(file)
@@ -363,7 +363,7 @@ func TestLifecycleBindsExistingSession(t *testing.T) {
 			t.Fatal("Pi lost the session file needed to resume from another repository")
 		}
 		hook["session_id"] = uuid()
-		if err = Hook(dir, file, bytes.NewReader(raw(hook))); err == nil {
+		if err = Hook(dir, file, bytes.NewReader(raw(hook)), mustSession(t, file).LaunchID); err == nil {
 			t.Fatal("rebound an existing AX name to another conversation")
 		}
 	}

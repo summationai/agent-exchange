@@ -162,6 +162,11 @@ func launch(ctx context.Context, dir, host string, args []string, spawnToken str
 		return fmt.Errorf("agent %q is already running on this machine", name)
 	}
 	defer lock.Close()
+	stateLock, e := lockSession(path)
+	if e != nil {
+		return e
+	}
+	defer stateLock.Close()
 	s, e := loadSession(path)
 	if os.IsNotExist(e) {
 		s = Session{ID: randomID("agt_"), Secret: randomID("") + randomID(""), Name: name, Host: host, Mesh: mesh, Workspace: cwd}
@@ -170,9 +175,6 @@ func launch(ctx context.Context, dir, host string, args []string, spawnToken str
 	}
 	if s.Host != host {
 		return fmt.Errorf("name %q belongs to %s; choose another name", name, s.Host)
-	}
-	if native := explicitResumeID(host, nativeArgs); s.Native != "" && native != "" && s.Native != native {
-		return bindingConflict(s, native)
 	}
 	if s.SpawnToken != "" && s.SpawnToken != spawnToken {
 		return fmt.Errorf("agent %q is reserved for a pane launch; inspect ax spawn-status %s", name, name)
@@ -183,6 +185,7 @@ func launch(ctx context.Context, dir, host string, args []string, spawnToken str
 	s.SpawnToken = ""
 	s.Terminal = detectTerminal()
 	s.Workspace, s.Mesh = cwd, mesh
+	s.LaunchID = randomID("launch_")
 	s.Started = false // This launch must receive its own native SessionStart.
 	s.BindingError = ""
 	s.DeliveryBoundary = os.Getenv("AX_DELIVERY_BOUNDARY")
@@ -197,6 +200,7 @@ func launch(ctx context.Context, dir, host string, args []string, spawnToken str
 	if e = saveSession(path, s); e != nil {
 		return e
 	}
+	stateLock.Close()
 	if e = ensureBroker(dir); e != nil {
 		return e
 	}
@@ -213,13 +217,13 @@ func launch(ctx context.Context, dir, host string, args []string, spawnToken str
 	if e != nil {
 		return e
 	}
-	env := append(os.Environ(), "AX_HOME="+dir, "AX_SESSION_FILE="+path)
+	env := append(os.Environ(), "AX_HOME="+dir, "AX_SESSION_FILE="+path, "AX_LAUNCH_ID="+s.LaunchID)
 	// Native daemons may run hooks without the launching shell environment.
-	hookCommand := "AX_HOME=" + shellQuote(dir) + " AX_SESSION_FILE=" + shellQuote(path) + " " + shellQuote(exe) + " hook"
+	hookCommand := "AX_HOME=" + shellQuote(dir) + " AX_SESSION_FILE=" + shellQuote(path) + " AX_LAUNCH_ID=" + shellQuote(s.LaunchID) + " " + shellQuote(exe) + " hook"
 	startupErrors := make(chan error, 1)
 	var argv []string
 	if host == "claude" {
-		config := object{"mcpServers": object{"ax": object{"command": exe, "args": []string{"bridge"}, "alwaysLoad": true, "env": object{"AX_HOME": dir, "AX_SESSION_FILE": path}}}}
+		config := object{"mcpServers": object{"ax": object{"command": exe, "args": []string{"bridge"}, "alwaysLoad": true, "env": object{"AX_HOME": dir, "AX_SESSION_FILE": path, "AX_LAUNCH_ID": s.LaunchID}}}}
 		hook := object{"type": "command", "command": hookCommand, "timeout": 3}
 		hooks := object{}
 		for _, event := range []string{"SessionStart", "UserPromptSubmit", "PreToolUse", "PermissionRequest", "PostToolUse", "Stop"} {
@@ -251,7 +255,7 @@ func launch(ctx context.Context, dir, host string, args []string, spawnToken str
 		if e != nil || !strings.Contains(string(b), "--thread") {
 			return errors.New("AX needs Codex with native queue support; update Codex first")
 		}
-		config := []string{"mcp_servers.ax.command=" + strconv.Quote(exe), "mcp_servers.ax.args=[\"bridge\"]", "mcp_servers.ax.env.AX_HOME=" + strconv.Quote(dir), "mcp_servers.ax.env.AX_SESSION_FILE=" + strconv.Quote(path), "mcp_servers.ax.enabled=true"}
+		config := []string{"mcp_servers.ax.command=" + strconv.Quote(exe), "mcp_servers.ax.args=[\"bridge\"]", "mcp_servers.ax.env.AX_HOME=" + strconv.Quote(dir), "mcp_servers.ax.env.AX_SESSION_FILE=" + strconv.Quote(path), "mcp_servers.ax.env.AX_LAUNCH_ID=" + strconv.Quote(s.LaunchID), "mcp_servers.ax.enabled=true"}
 		if !codexHelp(nativeArgs) {
 			remote, cleanup, err := startCodex(ctx, dir, path, nativeBin, append(codexConfigOverrides(nativeArgs), config...))
 			if err != nil {
@@ -364,7 +368,11 @@ func missingClaudeTranscript(path string) bool {
 	return os.IsNotExist(err)
 }
 
-func Hook(dir, file string, in io.Reader) error {
+func Hook(dir, file string, in io.Reader, launch ...string) error {
+	expected := os.Getenv("AX_LAUNCH_ID")
+	if len(launch) > 0 {
+		expected = launch[0]
+	}
 	var input struct {
 		Session    string `json:"session_id"`
 		Event      string `json:"hook_event_name"`
@@ -389,10 +397,17 @@ func Hook(dir, file string, in io.Reader) error {
 	if e != nil {
 		return e
 	}
+	if expected != s.LaunchID {
+		return errors.New("AX hook belongs to an earlier launch")
+	}
 	if s.BindingError != "" {
 		return errors.New(s.BindingError)
 	}
-	if s.Native == "" && input.Event == "SessionStart" {
+	if input.Event == "SessionStart" && (s.Native == "" || (!s.Started && s.LaunchID != "")) {
+		if s.Native != input.Session {
+			s.ClaudePending = ""
+			s.NativeFile = ""
+		}
 		s.Native = input.Session
 		if s.Host == "claude" && input.Source == "startup" && missingClaudeTranscript(input.Transcript) {
 			s.ClaudePending = input.Transcript
@@ -410,7 +425,7 @@ func Hook(dir, file string, in io.Reader) error {
 			// durable error source even if the broker is temporarily unavailable.
 			if c, err := dial(socketPath(dir)); err == nil {
 				defer c.close()
-				_ = c.call("ax.lifecycle", object{"agent_id": s.ID, "secret": s.Secret, "native_session_id": s.Native, "state": "blocked", "binding_error": s.BindingError}, nil)
+				_ = c.call("ax.lifecycle", object{"agent_id": s.ID, "secret": s.Secret, "native_session_id": s.Native, "launch_id": s.LaunchID, "state": "blocked", "binding_error": s.BindingError}, nil)
 			}
 			return conflict
 		}
@@ -447,35 +462,13 @@ func Hook(dir, file string, in io.Reader) error {
 		return e
 	}
 	defer c.close()
-	return c.call("ax.lifecycle", object{"agent_id": s.ID, "secret": s.Secret, "native_session_id": input.Session, "permission_mode": input.Permission, "state": state}, nil)
+	return c.call("ax.lifecycle", object{"agent_id": s.ID, "secret": s.Secret, "native_session_id": input.Session, "launch_id": s.LaunchID, "permission_mode": input.Permission, "state": state}, nil)
 }
 
 func bindingConflict(s Session, actual string) error {
 	return fmt.Errorf("AX name %q belongs to conversation %s, but %s selected %s. Exit this session, then run ax %s -n %s to resume the saved conversation, or relaunch this conversation with an unused AX name. Saved mail stays with the original name", s.Name, s.Native, s.Host, actual, s.Host, s.Name)
 }
 
-// Only preflight an unambiguous leading resume argument. Native pickers, names,
-// and other argument arrangements are checked by their SessionStart hook.
-func explicitResumeID(host string, args []string) string {
-	if len(args) == 0 {
-		return ""
-	}
-	value := ""
-	if host == "claude" {
-		if len(args) > 1 && (args[0] == "-r" || args[0] == "--resume") {
-			value = args[1]
-		}
-		if strings.HasPrefix(args[0], "--resume=") {
-			value = strings.TrimPrefix(args[0], "--resume=")
-		}
-	} else if host == "codex" && len(args) > 1 && args[0] == "resume" {
-		value = args[1]
-	}
-	if validNative(value) {
-		return value
-	}
-	return ""
-}
 func Main(args []string) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" {
 		fmt.Println(`Agent Exchange — connect your local coding agents.

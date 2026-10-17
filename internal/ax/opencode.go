@@ -75,7 +75,7 @@ func prepareOpenCode(ctx context.Context, dir, file, bin string, s Session, args
 	if err != nil {
 		return fail(err)
 	}
-	mcp["ax"] = object{"type": "local", "command": []string{exe, "bridge"}, "environment": object{"AX_HOME": dir, "AX_SESSION_FILE": file}, "enabled": true}
+	mcp["ax"] = object{"type": "local", "command": []string{exe, "bridge"}, "environment": object{"AX_HOME": dir, "AX_SESSION_FILE": file, "AX_LAUNCH_ID": s.LaunchID}, "enabled": true}
 	config["mcp"] = mcp
 	s.AdapterSocket = socket
 	if err = saveSession(file, s); err != nil {

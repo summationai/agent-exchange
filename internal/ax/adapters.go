@@ -54,16 +54,28 @@ func nativeID(host, id string) bool {
 
 func toolName(host, name string) string { return harnesses[host].toolPrefix + name }
 
-func bindAdapter(dir, file, native, permission, state string) error {
+func bindAdapter(dir, file, native, permission, state string, launch ...string) error {
+	lock, err := lockSession(file)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
 	s, err := loadSession(file)
 	if err != nil {
 		return err
 	}
+	if len(launch) > 0 && launch[0] != s.LaunchID {
+		return errors.New("AX adapter belongs to an earlier launch")
+	}
 	if !nativeID(s.Host, native) {
 		return errors.New("invalid native session ID")
 	}
-	if s.Native != "" && s.Native != native {
+	if s.Native != "" && s.Native != native && (s.Started || s.LaunchID == "") {
 		return fmt.Errorf("AX name %q belongs to conversation %s; choose a new AX name for %s", s.Name, s.Native, native)
+	}
+	if s.Native != native {
+		s.NativeFile = ""
+		s.ClaudePending = ""
 	}
 	s.Native, s.Started = native, true
 	if err = saveSession(file, s); err != nil {
@@ -74,7 +86,7 @@ func bindAdapter(dir, file, native, permission, state string) error {
 		return err
 	}
 	defer c.close()
-	return c.call("ax.lifecycle", object{"agent_id": s.ID, "secret": s.Secret, "native_session_id": native, "permission_mode": permission, "state": state}, nil)
+	return c.call("ax.lifecycle", object{"agent_id": s.ID, "secret": s.Secret, "native_session_id": native, "launch_id": s.LaunchID, "permission_mode": permission, "state": state}, nil)
 }
 
 // The adapter socket is private to one launch. A native plugin may wait for a
@@ -117,6 +129,7 @@ func startAdapterHost(ctx context.Context, dir, file string, failures chan<- err
 }
 
 func adapterServer(ctx context.Context, dir, file string, failures chan<- error, wake func(context.Context, string, string) error) *http.Server {
+	session, _ := loadSession(file)
 	a := &adapterHost{pending: map[string]*adapterWake{}, wakes: make(chan *adapterWake), wake: wake}
 	wakeSlots := make(chan struct{}, 8)
 	mux := http.NewServeMux()
@@ -124,7 +137,7 @@ func adapterServer(ctx context.Context, dir, file string, failures chan<- error,
 		var input struct{ Native, Permission, State string }
 		err := json.NewDecoder(io.LimitReader(r.Body, maxFrame)).Decode(&input)
 		if err == nil {
-			err = bindAdapter(dir, file, input.Native, input.Permission, input.State)
+			err = bindAdapter(dir, file, input.Native, input.Permission, input.State, session.LaunchID)
 		}
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusConflict)
@@ -150,7 +163,7 @@ func adapterServer(ctx context.Context, dir, file string, failures chan<- error,
 		var input adapterWake
 		err := json.NewDecoder(io.LimitReader(r.Body, maxFrame)).Decode(&input)
 		s, loadErr := loadSession(file)
-		if err != nil || loadErr != nil || !s.Started || input.Native != s.Native {
+		if err != nil || loadErr != nil || !s.Started || s.LaunchID != session.LaunchID || input.Native != s.Native {
 			http.Error(w, "adapter session is not ready", http.StatusConflict)
 			return
 		}

@@ -220,7 +220,11 @@ func TestCodexBypassSocketForwardsAndCloses(t *testing.T) {
 	})}
 	go server.Serve(listener)
 	defer server.Close()
-	remote, cleanup, err := codexSessionSocket(context.Background(), dir, filepath.Join(dir, "unused.json"), "unix://"+path, true, nil)
+	file := filepath.Join(dir, "session.json")
+	if err := saveSession(file, Session{}); err != nil {
+		t.Fatal(err)
+	}
+	remote, cleanup, err := codexSessionSocket(context.Background(), dir, file, "unix://"+path, true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

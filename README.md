@@ -18,7 +18,7 @@ You can also follow [AGENTS.md](AGENTS.md) yourself or browse the [documentation
 
 Install and sign in to your coding harnesses separately.
 
-AX 0.8.1 lets you reuse an agent name when selecting a new conversation and abandon obsolete queued messages. It retains opt-in Tailscale messaging, attachment to existing runtimes, and threaded follow-ups from 0.8.0. See the [release notes](claude.rc/release-notes.md). The installer downloads the latest published release.
+AX 0.8.2 starts recognized option-only Claude pane launches with one AX setup turn before delivering queued tasks. It retains reusable agent names, queued-message abandonment, and opt-in Tailscale messaging. See the [release notes](claude.rc/release-notes.md). The installer downloads the latest published release.
 
 ## Try it
 

@@ -427,6 +427,13 @@ func TestSpawnRunnerExplicitClaudeBypassOptIn(t *testing.T) {
 				t.Fatal(err)
 			}
 			actual := strings.Split(string(observed), "\x00")
+			seed := claudeNeedsStartup(tc.args)
+			if slices.Contains(actual, claudeStartupPrompt) != seed || child.ClaudeStartup != seed {
+				t.Fatal("spawn did not seed and gate its startup turn consistently")
+			}
+			if seed && (actual[len(actual)-3] != "--" || actual[len(actual)-2] != claudeStartupPrompt) {
+				t.Fatal("startup prompt can be consumed by a variadic native option")
+			}
 			prefix := len(tc.args)
 			if i := slices.Index(tc.args, "--"); i >= 0 {
 				prefix = i

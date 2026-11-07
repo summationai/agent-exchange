@@ -39,13 +39,15 @@ The working directory defaults to the calling agent's workspace. Native argument
 
 ## Readiness and retries
 
-Creating a pane does not mean its agent is ready. The result includes a launch phase and a separate `ready` value. Readiness requires a selected native conversation and an active AX messaging bridge. A new session may still need login, trust, or Claude's development Channel confirmation. Mail can queue while those steps are pending; a reply proves the peer handled the task.
+Creating a pane does not mean its agent is ready. The result includes a launch phase and a separate `ready` value. Readiness requires a selected native conversation and an active AX messaging bridge. For option-only Claude pane launches using recognized native options, AX supplies one fixed startup prompt that calls its discovery tool. The bridge holds queued tasks until that first model tool call, rather than treating MCP discovery alone as proof that Claude can consume its channel. Reconnecting that bridge does not repeat the startup turn. Native prompts, resume commands, and unfamiliar argument syntax pass through unchanged without an added prompt. A new session may still need login, trust, or Claude's development Channel confirmation. Mail can queue while those steps are pending; a reply proves the peer handled the task.
 
 The name is the retry key. Repeating the same launch from the same root session with the same arguments inspects its existing reservation. It does not create another pane. Changing the arguments under that name is an error. Use `ax spawn-status NAME` to inspect a reservation from an earlier root session. Names with existing saved conversations must use the normal resume command, not spawn.
 
 An unconfirmed terminal response is reported as uncertain. Inspect the terminal and `ax spawn-status NAME`; do not retry under a different name. If the session exits, its reservation remains for inspection, and normal AX resume syntax can reopen the saved conversation.
 
 Each root AX session can request at most eight pane launches across its whole tree, including failed or uncertain attempts. Nesting is limited to three levels. Repeating the same reservation consumes no additional slot. Relaunching a root session starts a new budget. Manual CLI launches outside an AX session share a budget for the originating terminal pane. These bounds prevent accidental launch cascades; they are not a security boundary against a process that can run arbitrary shell commands.
+
+Claude may show `server:ax · no MCP server configured with that name` even when the inline MCP server is connected. This matches [an upstream banner-validation report](https://github.com/anthropics/claude-code/issues/100865). Check MCP connectivity and message receipts before diagnosing missing configuration. A channel write alone does not prove model receipt; an acknowledgment or reply does. If an older session misses a wake, ask it to call `list_pending` once and handle the existing message, rather than resending the task.
 
 ## Verification
 

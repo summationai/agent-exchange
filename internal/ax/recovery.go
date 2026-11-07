@@ -18,6 +18,9 @@ func (e *requestFailure) Unwrap() error { return e.cause }
 // Retry the whole setup on one replacement connection. The request arguments,
 // including send/reply idempotency keys, stay unchanged across both attempts.
 func (b *bridge) toolCall(ctx context.Context, meta json.RawMessage, method string, args object, out any) error {
+	if err := b.startupCalled(); err != nil {
+		return &requestFailure{cause: err}
+	}
 	submitted := false
 	var err error
 	for attempt := 0; attempt < 2; attempt++ {

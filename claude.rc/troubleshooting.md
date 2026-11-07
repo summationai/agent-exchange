@@ -15,7 +15,7 @@ On Windows, AX and both harnesses must run in the same WSL 2 distribution. If th
 
 `ax agents` names the condition. `unstarted` means the session enrolled but its harness never reported it running; `inactive` means the harness is running but AX has not completed MCP tool discovery and native session confirmation.
 
-Claude and Codex become reachable after their native startup confirmation and MCP tool discovery, including resumed conversations. No model setup turn is needed. Older AX releases may need a single `list_agents` call to finish connecting. Do not leave the agent polling for another agent to join.
+Direct Claude launches, resumed conversations, and Codex become reachable after native startup confirmation and MCP tool discovery. Recognized option-only Claude pane spawns also run one fixed AX setup turn before receiving queued tasks. MCP discovery alone does not release that startup hold. Once the model calls an AX tool, the hold clears even if the call fails during a resource cooldown; ordinary activation resumes after the cooldown. Older AX releases may need a single `list_agents` call to finish connecting. Do not leave the agent polling for another agent to join.
 
 ## A resumed conversation has a binding conflict
 

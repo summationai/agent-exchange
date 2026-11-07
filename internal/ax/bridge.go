@@ -297,8 +297,8 @@ func wakeText(host, id string, external ...bool) string {
 	return "AX message " + id + ". Call " + tool + " with message_id=" + id + " to read the peer task and AX guidance."
 }
 
-// Native session confirmation and successful MCP tool discovery together prove
-// readiness. Activation must not depend on a resumed model repeating a setup turn.
+// Existing conversations activate after native confirmation and MCP discovery.
+// A seeded Claude pane first needs a model tool call; discovery precedes its turn.
 func (b *bridge) bootstrap() {
 	b.mu.Lock()
 	if b.active || b.bootstrapped || !b.toolsListed {
@@ -306,7 +306,7 @@ func (b *bridge) bootstrap() {
 		return
 	}
 	s, e := loadSession(b.file)
-	if e != nil || s.LaunchID != b.session.LaunchID || s.BindingError != "" || !s.Started || !nativeID(s.Host, s.Native) {
+	if e != nil || s.LaunchID != b.session.LaunchID || s.BindingError != "" || !s.Started || !nativeID(s.Host, s.Native) || s.ClaudeStartup {
 		b.mu.Unlock()
 		return
 	}
@@ -442,6 +442,36 @@ func (b *bridge) bind(ctx context.Context, c *client, meta json.RawMessage) erro
 		return err
 	}
 	return c.callContext(ctx, "ax.presence", presence, nil)
+}
+
+// A model tool call proves the startup turn ran, even if the request fails.
+// Clear the hold before cooldown or broker calls; bootstrap still checks binding.
+func (b *bridge) startupCalled() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.session.ClaudeStartup {
+		return nil
+	}
+	lock, err := lockSession(b.file)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	s, err := loadSession(b.file)
+	if err != nil {
+		return err
+	}
+	if s.LaunchID != b.session.LaunchID {
+		return errors.New("AX bridge belongs to an earlier launch")
+	}
+	if s.ClaudeStartup {
+		s.ClaudeStartup = false
+		if err := saveSession(b.file, s); err != nil {
+			return err
+		}
+	}
+	b.session = s
+	return nil
 }
 
 func (b *bridge) bindingLocked(meta json.RawMessage) (object, error) {

@@ -20,7 +20,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-var Version = "0.8.1" // Development builds may set this with the Go linker.
+var Version = "0.8.2" // Development builds may set this with the Go linker.
 
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'" }
 
@@ -187,6 +187,7 @@ func launch(ctx context.Context, dir, host string, args []string, spawnToken str
 	s.Workspace, s.Mesh = cwd, mesh
 	s.LaunchID = randomID("launch_")
 	s.Started = false // This launch must receive its own native SessionStart.
+	s.ClaudeStartup = host == "claude" && spawnToken != "" && claudeNeedsStartup(nativeArgs)
 	s.BindingError = ""
 	s.DeliveryBoundary = os.Getenv("AX_DELIVERY_BOUNDARY")
 	if _, e = sessionCapabilities(s); e != nil {
@@ -301,6 +302,12 @@ func launch(ctx context.Context, dir, host string, args []string, spawnToken str
 	// Keep injected Codex configuration in the subcommand's option scope, where
 	// it survives resume alongside user-supplied subcommand config overrides.
 	argv = withAXOptions(nativeArgs, argv)
+	if s.ClaudeStartup {
+		if len(nativeArgs) == 0 || nativeArgs[len(nativeArgs)-1] != "--" {
+			argv = append(argv, "--")
+		}
+		argv = append(argv, claudeStartupPrompt)
+	}
 	cmd := exec.CommandContext(ctx, nativeBin, argv...)
 	cmd.Env = env
 	// The harness retains the name lock even if its AX launcher crashes. Pi

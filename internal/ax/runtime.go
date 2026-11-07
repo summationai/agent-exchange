@@ -19,6 +19,7 @@ import (
 )
 
 type Session struct {
+	LaunchID         string          `json:"launch_id,omitempty"`
 	Kind             string          `json:"kind,omitempty"`
 	External         string          `json:"external,omitempty"`
 	ID               string          `json:"agent_id"`

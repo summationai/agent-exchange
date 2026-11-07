@@ -16,7 +16,7 @@ func claudeNeedsStartup(args []string) bool {
 		switch {
 		case flag == "--":
 			return len(args) == 0
-		case slices.Contains(strings.Fields("--model --effort --permission-mode --settings --setting-sources --append-system-prompt --append-system-prompt-file --system-prompt --system-prompt-file --fallback-model --autocompact --agent --agents --plugin-dir --plugin-url --session-id"), flag):
+		case slices.Contains(strings.Fields("--model --effort --permission-mode --settings --setting-sources --append-system-prompt --append-system-prompt-file --system-prompt --system-prompt-file --fallback-model --autocompact --agent --agents --plugin-dir --plugin-url --session-id --debug-file"), flag):
 			if !equal {
 				if len(args) == 0 {
 					return false
@@ -29,7 +29,7 @@ func claudeNeedsStartup(args []string) bool {
 					args = args[1:]
 				}
 			}
-		case slices.Contains(strings.Fields("--dangerously-skip-permissions --allow-dangerously-skip-permissions --no-chrome --chrome --ide --disable-slash-commands --brief --verbose --exclude-dynamic-system-prompt-sections --restricted --ax-screen-reader"), flag):
+		case slices.Contains(strings.Fields("--dangerously-skip-permissions --allow-dangerously-skip-permissions --no-chrome --chrome --ide --disable-slash-commands --brief --verbose --exclude-dynamic-system-prompt-sections --restricted --ax-screen-reader --strict-mcp-config --debug -d"), flag):
 		default:
 			return false
 		}

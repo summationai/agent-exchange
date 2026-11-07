@@ -27,6 +27,7 @@ var validName = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_-]{0,47}$`)
 var validID = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,80}$`)
 
 type Agent struct {
+	LaunchID       string                `json:"launch_id,omitempty"`
 	Remote         *networkRoute         `json:"remote,omitempty"`
 	Kind           string                `json:"kind,omitempty"`
 	External       string                `json:"external,omitempty"`
@@ -474,6 +475,18 @@ func (b *broker) request(c *serverConn, method string, params json.RawMessage) (
 			if p.Name != s.Name || p.Host != s.Host || p.Kind != s.Kind {
 				return nil, errors.New("saved identity belongs to another name or harness")
 			}
+			if p.LaunchID != s.LaunchID {
+				b.uncertain(p.ID, p.epoch)
+				if p.conn != nil {
+					p.conn.Close()
+					p.conn = nil
+				}
+				p.ready = false
+				if s.LaunchID != "" {
+					p.Native = ""
+				}
+			}
+			p.LaunchID = s.LaunchID
 			p.State = "starting"
 			p.BindingError = ""
 			p.Permission = "unknown"
@@ -495,7 +508,11 @@ func (b *broker) request(c *serverConn, method string, params json.RawMessage) (
 		if names != 0 {
 			return nil, errors.New("name already in use; resume its saved AX identity")
 		}
-		p = &peer{Agent: Agent{ID: s.ID, Name: s.Name, Host: s.Host, Mesh: s.Mesh, Native: s.Native, State: "starting", Permission: "unknown", Policy: "accept", AllowBypass: s.AllowBypass, DeliveryMode: s.DeliveryMode, Kind: s.Kind, External: s.External, NotifyTerminal: s.Kind == "relay"}, hash: digest(s.Secret)}
+		native := s.Native
+		if s.LaunchID != "" {
+			native = ""
+		}
+		p = &peer{Agent: Agent{LaunchID: s.LaunchID, ID: s.ID, Name: s.Name, Host: s.Host, Mesh: s.Mesh, Native: native, State: "starting", Permission: "unknown", Policy: "accept", AllowBypass: s.AllowBypass, DeliveryMode: s.DeliveryMode, Kind: s.Kind, External: s.External, NotifyTerminal: s.Kind == "relay"}, hash: digest(s.Secret)}
 		if e := b.save(p); e != nil {
 			return nil, e
 		}
@@ -510,6 +527,9 @@ func (b *broker) request(c *serverConn, method string, params json.RawMessage) (
 		p := b.peers[a.ID]
 		if p == nil || subtle.ConstantTimeCompare([]byte(p.hash), []byte(digest(a.Secret))) != 1 {
 			return nil, errors.New("invalid session credential")
+		}
+		if a.LaunchID != p.LaunchID {
+			return nil, errors.New("AX bridge belongs to an earlier launch")
 		}
 		if c.agent != "" {
 			return nil, errors.New("connection already registered")
@@ -563,6 +583,9 @@ func (b *broker) request(c *serverConn, method string, params json.RawMessage) (
 		p := b.peers[a.ID]
 		if p == nil || subtle.ConstantTimeCompare([]byte(p.hash), []byte(digest(a.Secret))) != 1 {
 			return nil, errors.New("invalid lifecycle credential")
+		}
+		if a.LaunchID != p.LaunchID {
+			return nil, errors.New("AX hook belongs to an earlier launch")
 		}
 		before := p.Agent
 		// Native resume/picker selection chooses the ID after enrollment. The

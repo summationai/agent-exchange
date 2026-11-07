@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -77,6 +78,16 @@ func TestClaudeLaunchKeepsChannelInForeground(t *testing.T) {
 // Tool discovery happens before Claude's first model turn. A spawned peer must
 // not consume its first queued task until its fixed startup turn calls AX.
 func TestClaudeSpawnWaitsForStartupToolCall(t *testing.T) {
+	for _, cooldown := range []bool{false, true} {
+		name := "normal"
+		if cooldown {
+			name = "startup_call_during_cooldown"
+		}
+		t.Run(name, func(t *testing.T) { testClaudeStartupDelivery(t, cooldown) })
+	}
+}
+
+func testClaudeStartupDelivery(t *testing.T, cooldown bool) {
 	dir := startTestServer(t)
 	s := Session{ID: randomID("agt_"), Secret: randomID(""), Name: "worker", Host: "claude", Mesh: testMesh, Native: uuid(), Started: true, ClaudeStartup: true}
 	file := filepath.Join(dir, "session.json")
@@ -117,7 +128,24 @@ func TestClaudeSpawnWaitsForStartupToolCall(t *testing.T) {
 	if status.Message.State != "queued" {
 		t.Fatal("first task was offered too early")
 	}
-	if err := b.toolCall(context.Background(), nil, "ax.list", object{}, nil); err != nil {
+	if cooldown {
+		budget := filepath.Join(dir, "resource-budget.json")
+		if err := os.WriteFile(budget, raw(resourceBudget{PausedUntil: time.Now().Add(time.Minute).UnixMilli()}), 0600); err != nil {
+			t.Fatal(err)
+		}
+		var paused *resourcePaused
+		if err := b.toolCall(context.Background(), nil, "ax.list", object{}, nil); !errors.As(err, &paused) {
+			t.Fatalf("expected cooldown: %v", err)
+		}
+		saved, err := loadSession(file)
+		if err != nil || saved.ClaudeStartup {
+			t.Fatal("failed startup tool call left the first task held")
+		}
+		if err := os.Remove(budget); err != nil {
+			t.Fatal(err)
+		}
+		b.bootstrap()
+	} else if err := b.toolCall(context.Background(), nil, "ax.list", object{}, nil); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -132,17 +160,16 @@ func TestClaudeSpawnWaitsForStartupToolCall(t *testing.T) {
 	if err != nil || saved.ClaudeStartup {
 		t.Fatal("startup barrier was not durably cleared")
 	}
-	b.bootstrap()
-	select {
-	case <-c.offers:
-		t.Fatal("bootstrap replayed the first task")
-	default:
-	}
 	// A replacement bridge resumes discovery activation, with no second setup turn.
 	b.active, b.bootstrapped = false, false
 	b.bootstrap()
 	if !b.active || out.Len() != 0 {
 		t.Fatal("reconnect required another startup turn")
+	}
+	select {
+	case <-c.offers:
+		t.Fatal("reconnect replayed the first task")
+	case <-time.After(200 * time.Millisecond):
 	}
 }
 
@@ -152,6 +179,11 @@ func TestClaudeStartupPreservesNativePrompts(t *testing.T) {
 		want bool
 	}{
 		{nil, true}, {[]string{"--exclude-dynamic-system-prompt-sections"}, true},
+		{[]string{"--strict-mcp-config"}, true}, {[]string{"--debug-file", "hooks.log"}, true},
+		{[]string{"--mcp-config", "config.json", "--strict-mcp-config"}, true},
+		{[]string{"--debug"}, true}, {[]string{"-d"}, true}, {[]string{"--debug=hooks,mcp"}, true},
+		{[]string{"--debug", "mcp"}, false}, {[]string{"--debug", "--", "prompt"}, false},
+		{[]string{"--debug", "--print"}, false}, {[]string{"--debug-file"}, false},
 		{[]string{"--bare"}, false}, {[]string{"--safe-mode"}, false}, {[]string{"--permission-mode", "bypassPermissions"}, true},
 		{[]string{"--model", "sonnet", "--effort=high"}, true},
 		{[]string{"--mcp-config", "config.json", "--allowedTools", "Read", "Bash"}, true},
@@ -164,5 +196,25 @@ func TestClaudeStartupPreservesNativePrompts(t *testing.T) {
 		if got := claudeNeedsStartup(tc.args); got != tc.want {
 			t.Fatalf("%q: seed=%v want=%v", tc.args, got, tc.want)
 		}
+	}
+}
+
+func TestClaudeStartupCannotClearAnotherLaunch(t *testing.T) {
+	dir := testDir(t)
+	old := Session{Host: "claude", LaunchID: "launch_old", ClaudeStartup: true}
+	current := old
+	current.LaunchID = "launch_new"
+	file := filepath.Join(dir, "session.json")
+	if err := saveSession(file, current); err != nil {
+		t.Fatal(err)
+	}
+	b := &bridge{session: old, file: file, dir: dir}
+	err := b.toolCall(context.Background(), nil, "ax.list", object{}, nil)
+	if err == nil || !strings.Contains(err.Error(), "earlier launch") {
+		t.Fatalf("stale startup call: %v", err)
+	}
+	saved, err := loadSession(file)
+	if err != nil || !saved.ClaudeStartup || saved.LaunchID != current.LaunchID {
+		t.Fatal("stale bridge cleared the new launch's startup hold")
 	}
 }

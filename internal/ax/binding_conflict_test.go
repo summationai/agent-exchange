@@ -3,10 +3,12 @@ package ax
 import (
 	"bytes"
 	"context"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestResumeBindingConflictIsDurableAndActionable(t *testing.T) {
@@ -105,61 +107,70 @@ func TestResumeBindingConflictIsDurableAndActionable(t *testing.T) {
 	}
 }
 
-func TestExplicitResumeConflictDoesNotEnrollOrLaunch(t *testing.T) {
-	for _, host := range []string{"claude", "codex"} {
-		t.Run(host, func(t *testing.T) {
-			dir := testDir(t)
-			bin := filepath.Join(dir, "bin")
-			if err := os.Mkdir(bin, 0700); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(filepath.Join(bin, host), []byte("#!/bin/sh\nexit 99\n"), 0700); err != nil {
-				t.Fatal(err)
-			}
-			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-			sessions := filepath.Join(dir, "sessions")
-			if err := os.Mkdir(sessions, 0700); err != nil {
-				t.Fatal(err)
-			}
-			file := filepath.Join(sessions, "saved.json")
-			s := Session{ID: randomID("agt_"), Secret: randomID("") + randomID(""), Name: "saved", Host: host, Mesh: testMesh, Native: uuid()}
-			if err := saveSession(file, s); err != nil {
-				t.Fatal(err)
-			}
-			before, _ := os.ReadFile(file)
-			flag := "-r"
-			if host == "codex" {
-				flag = "resume"
-			}
-			err := Launch(context.Background(), dir, host, []string{"-n", "saved", flag, uuid()})
-			if err == nil || !strings.Contains(err.Error(), "belongs to conversation") {
-				t.Fatalf("preflight: %v", err)
-			}
-			after, _ := os.ReadFile(file)
-			if !bytes.Equal(before, after) {
-				t.Fatal("preflight changed saved session")
-			}
-			if _, err = os.Stat(socketPath(dir)); !os.IsNotExist(err) {
-				t.Fatal("preflight started broker")
-			}
-		})
+func mustSession(t *testing.T, file string) Session {
+	t.Helper()
+	s, err := loadSession(file)
+	if err != nil {
+		t.Fatal(err)
 	}
+	return s
 }
 
-func TestExplicitResumeIDPreservesNativeNamesAndPrompts(t *testing.T) {
-	id := uuid()
-	for _, tc := range []struct {
-		host string
-		args []string
-		want string
-	}{
-		{"claude", []string{"-r", id}, id}, {"claude", []string{"--resume=" + id}, id}, {"codex", []string{"resume", id}, id},
-		{"claude", []string{"-r", "session-name"}, ""}, {"codex", []string{"resume", "--last"}, ""},
-		{"claude", []string{"--", "-r", id}, ""}, {"codex", []string{"-c", "resume", id}, ""},
-	} {
-		if got := explicitResumeID(tc.host, tc.args); got != tc.want {
-			t.Fatalf("%v: %s", tc.args, got)
-		}
+func TestExplicitResumeCanReuseAXName(t *testing.T) {
+	dir := startTestServer(t)
+	bin := testDir(t)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	selected := uuid()
+	out := filepath.Join(bin, "args")
+	script := "#!/bin/sh\nprintf '%s\\0' \"$@\" > " + shellQuote(out) + "\nexit 99\n"
+	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := privateDir(filepath.Join(dir, "sessions")); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(dir, "sessions", "saved.json")
+	original := Session{ID: randomID("agt_"), Secret: randomID("") + randomID(""), Name: "saved", Host: "claude", Mesh: testMesh, Native: uuid(), Started: true}
+	if err := saveSession(file, original); err != nil {
+		t.Fatal(err)
+	}
+	// A finishing old hook holds this same state lock. A new launch must
+	// wait before loading or replacing its generation.
+	stateLock, err := lockSession(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- Launch(context.Background(), dir, "claude", []string{"-n", "saved", "-r", selected}) }()
+	select {
+	case err := <-done:
+		stateLock.Close()
+		t.Fatalf("launch ignored concurrent state writer: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if saved := mustSession(t, file); saved.LaunchID != "" {
+		stateLock.Close()
+		t.Fatal("launch replaced state while previous writer held lock")
+	}
+	stateLock.Close()
+	err = <-done
+	if err == nil || err.Error() != "exit status 99" {
+		t.Fatalf("native harness was not launched: %v", err)
+	}
+	data, _ := os.ReadFile(out)
+	if !bytes.Contains(data, []byte(selected)) {
+		t.Fatal("native resume argument lost")
+	}
+	saved := mustSession(t, file)
+	if saved.LaunchID == "" || saved.Started || saved.ID != original.ID || saved.Secret != original.Secret {
+		t.Fatal("launch did not preserve AX identity")
+	}
+	if err = Hook(dir, file, bytes.NewReader(raw(object{"session_id": selected, "hook_event_name": "SessionStart", "permission_mode": "default"})), saved.LaunchID); err != nil {
+		t.Fatal(err)
+	}
+	saved = mustSession(t, file)
+	if saved.Native != selected || !saved.Started || saved.BindingError != "" {
+		t.Fatal("native selection did not replace saved conversation")
 	}
 }
 
@@ -214,5 +225,134 @@ func TestBrokerKeepsBindingConflictAcrossRestart(t *testing.T) {
 	a := reopened.list()[0]
 	if a.State != "binding-conflict" || a.BindingError != message || a.Native != s.Native {
 		t.Fatalf("conflict lost on restart: %+v", a)
+	}
+}
+
+func TestNewLaunchSelectsConversationAndFencesPreviousLaunch(t *testing.T) {
+	for _, host := range []string{"claude", "codex", "grok", "opencode", "pi"} {
+		t.Run(host, func(t *testing.T) {
+			b, dir := localBroker(t)
+			s, oldConn, _ := endpoint(t, b, "role", testMesh)
+			s.Host = host
+			s.LaunchID = "previous"
+			s.Started = true
+			if host == "opencode" {
+				s.Native = "ses_original"
+			}
+			p := b.peers[s.ID]
+			p.Host = host
+			p.Native = s.Native
+			p.LaunchID = s.LaunchID
+			if err := b.save(p); err != nil {
+				t.Fatal(err)
+			}
+			sender, sendConn, _ := endpoint(t, b, "sender", testMesh)
+			delivered := request(t, b, sendConn, "ax.send", object{"target": s.ID, "text": "already read", "client_message_id": "old"}).(Message)
+			if err := b.event(delivered.ID, "acknowledged", p.epoch); err != nil {
+				t.Fatal(err)
+			}
+			queued := request(t, b, sendConn, "ax.send", object{"target": s.ID, "text": "waiting for role", "client_message_id": "queued"}).(Message)
+			current := s
+			current.LaunchID = "current"
+			current.Started = false
+			request(t, b, &serverConn{}, "ax.enroll", current)
+			if b.peers[s.ID].Native != "" || b.peers[s.ID].ready {
+				t.Fatal("old native binding survived new launch")
+			}
+			if _, err := b.request(oldConn, "ax.list", raw(object{})); err == nil {
+				t.Fatal("old connection retained ownership")
+			}
+			for _, method := range []string{"ax.connect", "ax.lifecycle"} {
+				if _, err := b.request(&serverConn{}, method, raw(object{"version": "1", "agent_id": s.ID, "secret": s.Secret, "launch_id": "previous", "native_session_id": s.Native, "state": "ready"})); err == nil {
+					t.Fatalf("old launch reached %s", method)
+				}
+			}
+			native := uuid()
+			if host == "opencode" {
+				native = "ses_selected"
+			}
+			request(t, b, &serverConn{}, "ax.lifecycle", object{"agent_id": s.ID, "secret": s.Secret, "launch_id": "current", "native_session_id": native, "permission_mode": "default", "state": "ready"})
+			conn, client := net.Pipe()
+			defer conn.Close()
+			defer client.Close()
+			c := &serverConn{Conn: conn}
+			request(t, b, c, "ax.connect", object{"version": "1", "agent_id": s.ID, "secret": s.Secret, "launch_id": "current"})
+			request(t, b, c, "ax.ready", object{})
+			if b.peers[s.ID].Native != native {
+				t.Fatal("native selection did not bind")
+			}
+			for _, m := range []Message{delivered, queued} {
+				saved, err := b.message(m.ID)
+				if err != nil || saved.State != m.State && !(m.ID == delivered.ID && saved.State == "acknowledged") {
+					t.Fatal("launch replayed or discarded saved mail")
+				}
+			}
+			if got := request(t, b, sendConn, "ax.status", object{"message_id": queued.ID}).(object)["message"].(Message); got.Sender.ID != sender.ID || got.Recipient != s.ID {
+				t.Fatal("mail identity changed")
+			}
+			// A new generation must stay fenced after a broker restart too.
+			if err := b.db.Close(); err != nil {
+				t.Fatal(err)
+			}
+			reopened, err := openBroker(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer reopened.db.Close()
+			if _, err = reopened.request(&serverConn{}, "ax.lifecycle", raw(object{"agent_id": s.ID, "secret": s.Secret, "launch_id": "previous", "native_session_id": native, "state": "ready"})); err == nil {
+				t.Fatal("restart forgot launch fence")
+			}
+		})
+	}
+}
+
+func TestStaleHookAndBridgeCannotAdoptNewLaunch(t *testing.T) {
+	dir := startTestServer(t)
+	file := filepath.Join(dir, "session.json")
+	original := Session{LaunchID: "old", ID: randomID("agt_"), Secret: randomID("") + randomID(""), Name: "role", Host: "claude", Mesh: testMesh, Native: uuid(), Started: true}
+	current := original
+	current.LaunchID = "new"
+	current.Started = false
+	if err := saveSession(file, current); err != nil {
+		t.Fatal(err)
+	}
+	c, err := dial(socketPath(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.close()
+	if err = c.call("ax.enroll", current, nil); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.ReadFile(file)
+	if err = Hook(dir, file, bytes.NewReader(raw(object{"session_id": original.Native, "hook_event_name": "SessionStart"})), "old"); err == nil {
+		t.Fatal("stale hook selected old conversation")
+	}
+	b := &bridge{session: original, file: file, dir: dir, ctx: context.Background(), toolsListed: true}
+	b.bootstrap()
+	if b.bootstrapped || b.session.LaunchID != "old" {
+		t.Fatal("stale bridge adopted current launch")
+	}
+	if _, err = b.bindingLocked(nil); err == nil {
+		t.Fatal("stale tool call adopted current launch")
+	}
+	if err = bindAdapter(dir, file, original.Native, "default", "ready", "old"); err == nil {
+		t.Fatal("stale adapter adopted current launch")
+	}
+	after, _ := os.ReadFile(file)
+	if !bytes.Equal(before, after) {
+		t.Fatal("stale source mutated current session")
+	}
+	selected := uuid()
+	if err = Hook(dir, file, bytes.NewReader(raw(object{"session_id": selected, "hook_event_name": "SessionStart", "permission_mode": "default"})), "new"); err != nil {
+		t.Fatal(err)
+	}
+	saved := mustSession(t, file)
+	if saved.Native != selected || !saved.Started || saved.BindingError != "" {
+		t.Fatal("current launch failed to select")
+	}
+	// A second conversation inside the already-bound launch remains a conflict.
+	if err = Hook(dir, file, bytes.NewReader(raw(object{"session_id": original.Native, "hook_event_name": "SessionStart"})), "new"); err == nil {
+		t.Fatal("already-bound launch switched to another conversation")
 	}
 }

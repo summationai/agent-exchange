@@ -201,7 +201,7 @@ func (b *bridge) connectLoop() {
 		var connected struct {
 			Capabilities *deliveryCapabilities `json:"delivery_capabilities"`
 		}
-		e = c.call("ax.connect", object{"version": "1", "agent_id": s.ID, "secret": s.Secret, "lifecycle_events": true, "delivery_capabilities": caps, "peer_events": s.DeliveryMode == "mcp", "adapter_version": Version}, &connected)
+		e = c.call("ax.connect", object{"version": "1", "agent_id": s.ID, "secret": s.Secret, "launch_id": s.LaunchID, "lifecycle_events": true, "delivery_capabilities": caps, "peer_events": s.DeliveryMode == "mcp", "adapter_version": Version}, &connected)
 		if e != nil {
 			c.close()
 			fmt.Fprintln(os.Stderr, "AX:", e)
@@ -214,7 +214,7 @@ func (b *bridge) connectLoop() {
 		}
 		b.mu.Lock()
 		// A hook may have recorded a conflict while messaging was disconnected.
-		if latest, err := loadSession(b.file); err == nil && latest.BindingError != "" {
+		if latest, err := loadSession(b.file); err == nil && latest.BindingError != "" && latest.LaunchID == b.session.LaunchID {
 			b.session = latest
 			b.active = false
 		}
@@ -306,7 +306,7 @@ func (b *bridge) bootstrap() {
 		return
 	}
 	s, e := loadSession(b.file)
-	if e != nil || s.BindingError != "" || !s.Started || !nativeID(s.Host, s.Native) || s.ClaudeStartup {
+	if e != nil || s.LaunchID != b.session.LaunchID || s.BindingError != "" || !s.Started || !nativeID(s.Host, s.Native) || s.ClaudeStartup {
 		b.mu.Unlock()
 		return
 	}
@@ -444,6 +444,36 @@ func (b *bridge) bind(ctx context.Context, c *client, meta json.RawMessage) erro
 	return c.callContext(ctx, "ax.presence", presence, nil)
 }
 
+// A model tool call proves the startup turn ran, even if the request fails.
+// Clear the hold before cooldown or broker calls; bootstrap still checks binding.
+func (b *bridge) startupCalled() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.session.ClaudeStartup {
+		return nil
+	}
+	lock, err := lockSession(b.file)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	s, err := loadSession(b.file)
+	if err != nil {
+		return err
+	}
+	if s.LaunchID != b.session.LaunchID {
+		return errors.New("AX bridge belongs to an earlier launch")
+	}
+	if s.ClaudeStartup {
+		s.ClaudeStartup = false
+		if err := saveSession(b.file, s); err != nil {
+			return err
+		}
+	}
+	b.session = s
+	return nil
+}
+
 func (b *bridge) bindingLocked(meta json.RawMessage) (object, error) {
 	lock, err := lockSession(b.file)
 	if err != nil {
@@ -456,6 +486,9 @@ func (b *bridge) bindingLocked(meta json.RawMessage) (object, error) {
 	if e != nil {
 		return nil, e
 	}
+	if s.LaunchID != b.session.LaunchID {
+		return nil, errors.New("AX bridge belongs to an earlier launch")
+	}
 	b.session = s
 	if s.BindingError != "" {
 		return nil, errors.New(s.BindingError)
@@ -463,15 +496,6 @@ func (b *bridge) bindingLocked(meta json.RawMessage) (object, error) {
 	if s.Host != "codex" {
 		if !s.Started || !nativeID(s.Host, s.Native) {
 			return nil, fmt.Errorf("%s session is still starting; retry shortly", s.Host)
-		}
-		if s.Host == "claude" && s.ClaudeStartup {
-			// A model tool call proves the fixed startup turn actually ran.
-			// Persist once so a bridge reconnect needs no additional model turn.
-			s.ClaudeStartup = false
-			if err := saveSession(b.file, s); err != nil {
-				return nil, err
-			}
-			b.session = s
 		}
 		return nil, nil
 	}
@@ -488,7 +512,7 @@ func (b *bridge) bindingLocked(meta json.RawMessage) (object, error) {
 	if m.Turn.Thread != "" && m.Turn.Thread != m.Thread {
 		return nil, errors.New("inconsistent Codex thread metadata")
 	}
-	if b.session.Native != "" && b.session.Native != m.Thread {
+	if b.session.Native != "" && b.session.Native != m.Thread && (b.session.Started || b.session.LaunchID == "") {
 		return nil, errors.New("this AX bridge belongs to another Codex session")
 	}
 	b.session.Native = m.Thread
@@ -506,6 +530,9 @@ func runBridge(ctx context.Context, dir, file string, in io.Reader, out io.Write
 	s, e := loadSession(file)
 	if e != nil {
 		return e
+	}
+	if expected := os.Getenv("AX_LAUNCH_ID"); s.Host != "external" && expected != s.LaunchID {
+		return errors.New("AX bridge belongs to an earlier launch")
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()

@@ -163,7 +163,7 @@ func prepareGrok(ctx context.Context, dir, file, bin string, s Session, args, en
 		closeAll()
 		return nil, nil, nil, err
 	}
-	mcp := object{"name": "ax", "command": exe, "args": []string{"bridge"}, "env": []object{{"name": "AX_HOME", "value": dir}, {"name": "AX_SESSION_FILE", "value": file}}}
+	mcp := object{"name": "ax", "command": exe, "args": []string{"bridge"}, "env": []object{{"name": "AX_HOME", "value": dir}, {"name": "AX_SESSION_FILE", "value": file}, {"name": "AX_LAUNCH_ID", "value": s.LaunchID}}}
 	go func() {
 		for {
 			client, err := l.Accept()
@@ -199,7 +199,7 @@ func prepareGrok(ctx context.Context, dir, file, bin string, s Session, args, en
 				defer upstream.Close()
 				g := &grokConnection{conn: upstream, permission: "default", prompts: map[string]chan error{}}
 				err = proxyGrok(client, g, mcp, func(native, permission string) error {
-					if err := bindAdapter(dir, file, native, permission, "ready"); err != nil {
+					if err := bindAdapter(dir, file, native, permission, "ready", s.LaunchID); err != nil {
 						return err
 					}
 					mu.Lock()

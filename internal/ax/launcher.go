@@ -455,21 +455,27 @@ func Hook(dir, file string, in io.Reader, launch ...string) error {
 	}
 	lock.Close()
 	state := "busy"
+	var cause *stateCause
 	switch input.Event {
 	case "SessionStart", "Stop":
 		state = "ready"
 	case "PermissionRequest":
 		state = "blocked"
+		cause = &stateCause{Kind: "permission", Tool: input.Tool}
 	}
 	if input.Tool == "AskUserQuestion" {
 		state = "blocked"
+		cause = nil
+		if input.Event != "PostToolUse" { // The answer has arrived; the state stays until the next event.
+			cause = &stateCause{Kind: "question"}
+		}
 	}
 	c, e := dial(socketPath(dir))
 	if e != nil {
 		return e
 	}
 	defer c.close()
-	return c.call("ax.lifecycle", object{"agent_id": s.ID, "secret": s.Secret, "native_session_id": input.Session, "launch_id": s.LaunchID, "permission_mode": input.Permission, "state": state}, nil)
+	return c.call("ax.lifecycle", object{"agent_id": s.ID, "secret": s.Secret, "native_session_id": input.Session, "launch_id": s.LaunchID, "permission_mode": input.Permission, "state": state, "state_cause": cause}, nil)
 }
 
 func bindingConflict(s Session, actual string) error {
@@ -640,7 +646,7 @@ Ask either agent to message another by name.
 		var result any
 		switch args[0] {
 		case "agents":
-			var agents []Agent
+			var agents []discoveredAgent
 			e = c.call("ax.inspect", object{}, &agents)
 			if e != nil {
 				return e
@@ -648,19 +654,7 @@ Ask either agent to message another by name.
 			if len(agents) == 0 {
 				fmt.Println("No AX agents yet. Launch a named session with ax HARNESS --name NAME.")
 			}
-			for _, a := range agents {
-				kind := ""
-				if a.Kind != "" {
-					kind = " kind=" + a.Kind + " permission=" + a.Permission
-				}
-				fmt.Printf("%-18s %-8s %-10s policy=%s external=%s%s tools=%t wake=%s\n", a.Name, a.Host, a.State, a.Policy, externalPolicy(a), kind, a.Connectivity.Tools, a.Connectivity.Wake)
-				if a.Capabilities != nil {
-					fmt.Printf("  delivery: %s at %s (adapter %s)\n", a.Capabilities.Content, a.Capabilities.Boundary, a.Capabilities.AdapterVersion)
-				}
-				if a.BindingError != "" {
-					fmt.Println("  " + a.BindingError)
-				}
-			}
+			printAgents(os.Stdout, agents, time.Now())
 			return nil
 		case "status":
 			if len(args) != 2 {

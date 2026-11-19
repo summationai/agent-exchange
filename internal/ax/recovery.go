@@ -28,7 +28,7 @@ func (b *bridge) toolCall(ctx context.Context, meta json.RawMessage, method stri
 			break
 		}
 		var c *client
-		c, err = b.connection(ctx)
+		c, err = b.connection(ctx, meta)
 		if err != nil {
 			break
 		}

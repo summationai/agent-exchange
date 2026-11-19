@@ -98,6 +98,8 @@ type bridge struct {
 	toolsListed         bool
 	bootstrapped        bool
 	discovered          chan struct{}
+	connectWake         chan struct{}
+	claim               *bridgeClaim
 }
 
 func (b *bridge) emit(p packet) error {
@@ -106,10 +108,56 @@ func (b *bridge) emit(p packet) error {
 	p.JSONRPC = "2.0"
 	return json.NewEncoder(b.out).Encode(p)
 }
-func (b *bridge) connection(ctx context.Context) (*client, error) {
+
+type bridgeClaim struct {
+	native string
+	ctx    context.Context
+}
+
+// Metadata is supplied only by model tool calls, never background discovery.
+func (b *bridge) connection(ctx context.Context, meta ...json.RawMessage) (*client, error) {
+	var claim *bridgeClaim
+	defer func() {
+		b.mu.Lock()
+		if b.claim == claim {
+			b.claim = nil
+		}
+		b.mu.Unlock()
+	}()
 	for {
+		var bindingRetry <-chan time.Time
 		b.mu.Lock()
 		c := b.c
+		if c == nil && len(meta) > 0 && b.session.Host == "codex" {
+			s, err := loadSession(b.file)
+			if err == nil && s.LaunchID != b.session.LaunchID {
+				err = errors.New("AX bridge belongs to an earlier launch")
+			}
+			if err == nil && s.BindingError != "" {
+				err = errors.New(s.BindingError)
+			}
+			if err == nil && s.Started {
+				_, err = codexPresence(s, meta[0])
+				if err == nil {
+					claim = &bridgeClaim{native: s.Native, ctx: ctx}
+					b.claim = claim
+					if b.connectWake == nil {
+						b.connectWake = make(chan struct{}, 1)
+					}
+					select {
+					case b.connectWake <- struct{}{}:
+					default:
+					}
+				}
+			}
+			if err != nil {
+				b.mu.Unlock()
+				return nil, err
+			}
+			// SessionStart saves the binding before notifying the broker. Retry
+			// pending claims only while this bounded tool call is waiting.
+			bindingRetry = time.After(time.Second)
+		}
 		if b.changed == nil {
 			b.changed = make(chan struct{})
 		}
@@ -128,6 +176,7 @@ func (b *bridge) connection(ctx context.Context) (*client, error) {
 		case <-ctx.Done():
 			return nil, &transportError{cause: ctx.Err()}
 		case <-changed:
+		case <-bindingRetry:
 		}
 	}
 }
@@ -149,6 +198,12 @@ func (b *bridge) invalidate(c *client) {
 	}
 }
 func (b *bridge) connectLoop() {
+	b.mu.Lock()
+	if b.connectWake == nil {
+		b.connectWake = make(chan struct{}, 1)
+	}
+	wake := b.connectWake
+	b.mu.Unlock()
 	retryDelay := time.Second
 	for retry := false; b.ctx.Err() == nil; retry = true {
 		// Bound every reconnect path, including immediate disconnects after a
@@ -158,6 +213,7 @@ func (b *bridge) connectLoop() {
 			case <-b.ctx.Done():
 				return
 			case <-time.After(retryDelay):
+			case <-wake:
 			}
 			retryDelay = min(2*retryDelay, 15*time.Second)
 		}
@@ -185,6 +241,11 @@ func (b *bridge) connectLoop() {
 		}
 		b.mu.Lock()
 		s := b.session
+		claim := b.claim
+		claimNative := ""
+		if claim != nil && claim.ctx.Err() == nil {
+			claimNative = claim.native
+		}
 		b.mu.Unlock()
 		// Generic attachments report tool/wake connectivity, but do not claim
 		// a built-in adapter's versioned native delivery contract.
@@ -201,7 +262,13 @@ func (b *bridge) connectLoop() {
 		var connected struct {
 			Capabilities *deliveryCapabilities `json:"delivery_capabilities"`
 		}
-		e = c.call("ax.connect", object{"version": "1", "agent_id": s.ID, "secret": s.Secret, "launch_id": s.LaunchID, "lifecycle_events": true, "delivery_capabilities": caps, "peer_events": s.DeliveryMode == "mcp", "adapter_version": Version}, &connected)
+		connectCtx := b.ctx
+		if claimNative != "" {
+			connectCtx = claim.ctx
+		}
+		connectCtx, cancelConnect := context.WithTimeout(connectCtx, 5*time.Second)
+		e = c.callContext(connectCtx, "ax.connect", object{"version": "1", "agent_id": s.ID, "secret": s.Secret, "launch_id": s.LaunchID, "claim_native_session_id": claimNative, "lifecycle_events": true, "delivery_capabilities": caps, "peer_events": s.DeliveryMode == "mcp", "adapter_version": Version}, &connected)
+		cancelConnect()
 		if e != nil {
 			c.close()
 			fmt.Fprintln(os.Stderr, "AX:", e)
@@ -213,6 +280,11 @@ func (b *bridge) connectLoop() {
 			return
 		}
 		b.mu.Lock()
+		// Consume the proof once. Background reconnects must never fight a
+		// replacement that later proves it owns the same conversation.
+		if b.claim == claim {
+			b.claim = nil
+		}
 		// A hook may have recorded a conflict while messaging was disconnected.
 		if latest, err := loadSession(b.file); err == nil && latest.BindingError != "" && latest.LaunchID == b.session.LaunchID {
 			b.session = latest
@@ -499,6 +571,19 @@ func (b *bridge) bindingLocked(meta json.RawMessage) (object, error) {
 		}
 		return nil, nil
 	}
+	presence, err := codexPresence(s, meta)
+	if err != nil {
+		return nil, err
+	}
+	b.session.Native = presence["native_session_id"].(string)
+	b.session.Started = true
+	if err := saveSession(b.file, b.session); err != nil {
+		return nil, err
+	}
+	return presence, nil
+}
+
+func codexPresence(s Session, meta json.RawMessage) (object, error) {
 	var m struct {
 		Thread string `json:"threadId"`
 		Turn   struct {
@@ -512,16 +597,12 @@ func (b *bridge) bindingLocked(meta json.RawMessage) (object, error) {
 	if m.Turn.Thread != "" && m.Turn.Thread != m.Thread {
 		return nil, errors.New("inconsistent Codex thread metadata")
 	}
-	if b.session.Native != "" && b.session.Native != m.Thread && (b.session.Started || b.session.LaunchID == "") {
+	if s.Native != "" && s.Native != m.Thread && (s.Started || s.LaunchID == "") {
 		return nil, errors.New("this AX bridge belongs to another Codex session")
-	}
-	b.session.Native = m.Thread
-	b.session.Started = true
-	if e := saveSession(b.file, b.session); e != nil {
-		return nil, e
 	}
 	return object{"native_session_id": m.Thread, "permission_mode": m.Turn.Sandbox, "state": "ready"}, nil
 }
+
 func Bridge(ctx context.Context, dir, file string, in io.Reader, out io.Writer) error {
 	return runBridge(ctx, dir, file, in, out, nil)
 }
@@ -536,6 +617,12 @@ func runBridge(ctx context.Context, dir, file string, in io.Reader, out io.Write
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	stopInput := context.AfterFunc(ctx, func() {
+		if closer, ok := in.(io.Closer); ok {
+			_ = closer.Close()
+		}
+	})
+	defer stopInput()
 	b := &bridge{session: s, file: file, dir: dir, instance: randomID("ins_"), out: out, ctx: ctx, discovered: make(chan struct{}, 1)}
 	stopResources := watchResources(ctx, dir, func() {
 		// A stuck worker must not block the watchdog behind its mutex.
@@ -700,6 +787,9 @@ func runBridge(ctx context.Context, dir, file string, in io.Reader, out io.Write
 		if e != nil {
 			return e
 		}
+	}
+	if ctx.Err() != nil {
+		return nil
 	}
 	return scan.Err()
 }

@@ -413,6 +413,7 @@ func (b *broker) request(c *serverConn, method string, params json.RawMessage) (
 		StateFilter     string                `json:"delivery_state"`
 		Version         string                `json:"version"`
 		Native          string                `json:"native_session_id"`
+		ClaimNative     string                `json:"claim_native_session_id"`
 		Permission      string                `json:"permission_mode"`
 		State           string                `json:"state"`
 		Policy          string                `json:"policy"`
@@ -546,9 +547,12 @@ func (b *broker) request(c *serverConn, method string, params json.RawMessage) (
 			return nil, errors.New("bridge lacks external guidance; finish the AX update and relaunch this session")
 		}
 		// Duplicate MCP processes must not fence and reconnect each other forever.
-		// Preserve the live owner; a disconnected or expired lease can be replaced.
+		// Preserve the live owner unless a tool call proves the saved Codex
+		// conversation needs a replacement MCP client. Other threads cannot claim it.
 		if p.conn != nil && time.Since(p.seen) <= 15*time.Second {
-			return nil, errors.New("AX agent already connected; waiting for its existing bridge to disconnect")
+			if p.Host != "codex" || !validNative(a.ClaimNative) || a.ClaimNative != p.Native {
+				return nil, errors.New("AX agent already connected; waiting for its existing bridge to disconnect")
+			}
 		}
 		for _, other := range b.peers {
 			if other.ID != p.ID && other.Name == p.Name && other.Online {

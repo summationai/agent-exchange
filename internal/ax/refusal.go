@@ -19,7 +19,7 @@ var refusalRecovery = map[string]string{
 	"not_sender":                "Only the sender of a message can resend it or follow up on it.",
 	"not_recipient":             "Only the recipient of a message can reply to it; add to your own request with follow_up.",
 	"not_expired":               "Only an expired message can be resent; add to one still in progress with follow_up.",
-	"not_offered":               "The message has not been offered to you yet; reply after its wake.",
+	"not_offered":               "The message has not been offered to you yet. For a manual endpoint, call check_inbox once on its next user turn; otherwise wait for its wake. Reply after receiving it.",
 	"already_terminal":          "The message is already in a final state; send a new message if anything remains to be done.",
 	"unknown_target":            "Check list_agents for the recipient's name or agent_id, then send again.",
 	"ambiguous_target":          "Several agents share this name; call list_agents and send to the agent_id.",

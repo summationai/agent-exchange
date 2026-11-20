@@ -425,7 +425,7 @@ func (b *broker) request(c *serverConn, method string, params json.RawMessage) (
 		Native          string                `json:"native_session_id"`
 		Permission      string                `json:"permission_mode"`
 		State           string                `json:"state"`
-		Cause           *stateCause           `json:"state_cause"`
+		Cause           json.RawMessage       `json:"state_cause"`
 		Policy          string                `json:"policy"`
 		Target          string                `json:"target"`
 		Text            string                `json:"text"`

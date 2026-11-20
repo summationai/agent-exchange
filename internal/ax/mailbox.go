@@ -216,7 +216,11 @@ type stateCause struct {
 
 var validToolName = regexp.MustCompile(`^[a-zA-Z0-9_.:-]{1,128}$`)
 
-func reportedCause(state string, c *stateCause) stateCause {
+func reportedCause(state string, data json.RawMessage) stateCause {
+	var c *stateCause
+	if json.Unmarshal(data, &c) != nil {
+		c = nil
+	}
 	switch {
 	case state != "blocked" || c == nil:
 		return stateCause{}
@@ -295,6 +299,13 @@ func (b *broker) discovery() []discoveredAgent {
 		}
 		s.Reason = agentReason(p, out[i].Agent)
 		out[i].AgentStatus = s
+	}
+	// Optional diagnostics must not make a previously readable roster exceed
+	// the RPC frame. Leave room for the response envelope and request ID.
+	if len(raw(out)) > maxFrame-4096 {
+		for i := range out {
+			out[i].AgentStatus = nil
+		}
 	}
 	return out
 }

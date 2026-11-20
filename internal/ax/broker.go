@@ -414,6 +414,7 @@ func (b *broker) request(c *serverConn, method string, params json.RawMessage) (
 		Version         string                `json:"version"`
 		Native          string                `json:"native_session_id"`
 		ClaimNative     string                `json:"claim_native_session_id"`
+		ClaimDeadline   int64                 `json:"claim_deadline_ms"`
 		Permission      string                `json:"permission_mode"`
 		State           string                `json:"state"`
 		Policy          string                `json:"policy"`
@@ -550,7 +551,7 @@ func (b *broker) request(c *serverConn, method string, params json.RawMessage) (
 		// Preserve the live owner unless a tool call proves the saved Codex
 		// conversation needs a replacement MCP client. Other threads cannot claim it.
 		if p.conn != nil && time.Since(p.seen) <= 15*time.Second {
-			if p.Host != "codex" || !validNative(a.ClaimNative) || a.ClaimNative != p.Native {
+			if p.Host != "codex" || !validNative(a.ClaimNative) || a.ClaimNative != p.Native || a.ClaimDeadline <= time.Now().UnixMilli() {
 				return nil, errors.New("AX agent already connected; waiting for its existing bridge to disconnect")
 			}
 		}

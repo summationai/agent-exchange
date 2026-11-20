@@ -267,7 +267,12 @@ func (b *bridge) connectLoop() {
 			connectCtx = claim.ctx
 		}
 		connectCtx, cancelConnect := context.WithTimeout(connectCtx, 5*time.Second)
-		e = c.callContext(connectCtx, "ax.connect", object{"version": "1", "agent_id": s.ID, "secret": s.Secret, "launch_id": s.LaunchID, "claim_native_session_id": claimNative, "lifecycle_events": true, "delivery_capabilities": caps, "peer_events": s.DeliveryMode == "mcp", "adapter_version": Version}, &connected)
+		claimDeadline := int64(0)
+		if claimNative != "" {
+			deadline, _ := connectCtx.Deadline()
+			claimDeadline = deadline.UnixMilli()
+		}
+		e = c.callContext(connectCtx, "ax.connect", object{"version": "1", "agent_id": s.ID, "secret": s.Secret, "launch_id": s.LaunchID, "claim_native_session_id": claimNative, "claim_deadline_ms": claimDeadline, "lifecycle_events": true, "delivery_capabilities": caps, "peer_events": s.DeliveryMode == "mcp", "adapter_version": Version}, &connected)
 		cancelConnect()
 		if e != nil {
 			c.close()

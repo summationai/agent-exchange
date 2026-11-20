@@ -113,7 +113,7 @@ func TestBrokerClaimRequiresCurrentCodexIdentity(t *testing.T) {
 		t.Run(invalid, func(t *testing.T) {
 			b, _ := localBroker(t)
 			s, owner, _ := endpoint(t, b, "reviewer", testMesh)
-			args := object{"version": "1", "agent_id": s.ID, "secret": s.Secret, "claim_native_session_id": s.Native}
+			args := object{"version": "1", "agent_id": s.ID, "secret": s.Secret, "claim_native_session_id": s.Native, "claim_deadline_ms": time.Now().Add(time.Second).UnixMilli()}
 			switch invalid {
 			case "native":
 				args["claim_native_session_id"] = uuid()
@@ -369,4 +369,20 @@ func TestDisplacedToolRetryCannotReclaimBridge(t *testing.T) {
 	if err := replacement.call("ax.heartbeat", object{}, nil); err != nil {
 		t.Fatalf("automatic retry fenced the replacement owner: %v", err)
 	}
+}
+
+func TestBrokerRejectsSubmittedExpiredClaim(t *testing.T) {
+	b, _ := localBroker(t)
+	s, owner, _ := endpoint(t, b, "current", testMesh)
+	b.peers[s.ID].Host = "codex"
+	x, y := net.Pipe()
+	defer x.Close()
+	defer y.Close()
+	// The request reached the broker while the caller's deadline was live,
+	// but was processed only after that deadline. It must not fence the owner.
+	args := object{"version": "1", "agent_id": s.ID, "secret": s.Secret, "claim_native_session_id": s.Native, "claim_deadline_ms": time.Now().Add(-time.Millisecond).UnixMilli()}
+	if _, err := b.request(&serverConn{Conn: x}, "ax.connect", raw(args)); err == nil {
+		t.Fatal("expired submitted claim replaced the owner")
+	}
+	request(t, b, owner, "ax.heartbeat", object{})
 }

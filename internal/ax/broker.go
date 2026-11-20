@@ -891,8 +891,11 @@ func (b *broker) message(id string) (Message, error) {
 	var m Message
 	var data, state string
 	e := b.db.QueryRow("SELECT data,state FROM messages WHERE id=?", id).Scan(&data, &state)
-	if e != nil {
+	if errors.Is(e, sql.ErrNoRows) {
 		return m, errMessageNotFound
+	}
+	if e != nil {
+		return m, e
 	}
 	if e = json.Unmarshal([]byte(data), &m); e != nil {
 		return m, e

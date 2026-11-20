@@ -98,7 +98,11 @@ func toolFailure(err error, args object) object {
 	}
 	var rpc *rpcError
 	var request *requestFailure
-	if _, keyed := args["client_message_id"]; keyed && errors.As(err, &rpc) && rpc.Code == requestRefusedCode && !(errors.As(err, &request) && request.lost) {
+	if errors.As(err, &request) && request.lost {
+		// A later refusal cannot establish the outcome of the lost attempt.
+		return failure
+	}
+	if _, keyed := args["client_message_id"]; keyed && errors.As(err, &rpc) && rpc.Code == requestRefusedCode {
 		// The broker refused this send before storing anything, and no earlier
 		// attempt of the call lost its response, so nothing was sent.
 		step, _ := rpc.Data["recovery"].(string)

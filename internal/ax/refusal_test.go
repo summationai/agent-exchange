@@ -275,8 +275,13 @@ func TestRefusalAfterLostResponseStaysUncertain(t *testing.T) {
 	if err == nil {
 		t.Fatal("retry accepted")
 	}
-	if e := <-done; e != nil {
-		t.Fatal(e)
+	select {
+	case e := <-done:
+		if e != nil {
+			t.Fatal(e)
+		}
+	case <-ctx.Done():
+		t.Fatal("retry broker did not finish before its deadline")
 	}
 	var rpc *rpcError
 	if !errors.As(err, &rpc) || rpc.Code != -32003 {
@@ -286,5 +291,27 @@ func TestRefusalAfterLostResponseStaysUncertain(t *testing.T) {
 	recovery, _ := failure["recovery"].(string)
 	if failure["code"] != "request_failed" || failure["submission"] != "outcome_unknown" || !strings.Contains(recovery, "reuse this client_message_id") || strings.Contains(recovery, "Nothing was") {
 		t.Fatalf("refusal after a lost attempt: %v", failure)
+	}
+}
+
+func TestParentLookupFailureIsNotMissingMessage(t *testing.T) {
+	b, _ := localBroker(t)
+	if err := b.db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	_, err := b.message("msg_existing")
+	var rpc *rpcError
+	if errors.Is(err, errMessageNotFound) || errors.As(unknownMessage(err), &rpc) {
+		t.Fatalf("database failure reported as missing parent: %v", err)
+	}
+}
+
+func TestLaterRefusalCannotEraseLostOutcome(t *testing.T) {
+	for _, code := range []int{requestRefusedCode, replyDepthLimitCode, externalPolicyCode} {
+		err := &requestFailure{cause: &rpcError{Code: code, Message: "refused", Data: object{"recovery": "use another request"}}, submitted: true, lost: true}
+		failure := toolFailure(err, object{"client_message_id": "original"})
+		if failure["submission"] != "outcome_unknown" || !strings.Contains(failure["recovery"].(string), "reuse this client_message_id") {
+			t.Fatalf("code %d erased lost outcome: %v", code, failure)
+		}
 	}
 }

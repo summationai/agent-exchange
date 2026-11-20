@@ -1,14 +1,20 @@
-# Agent Exchange 0.8.2
+# Agent Exchange 0.8.3
 
-New Claude panes now receive one fixed AX setup prompt before queued tasks are handed to the channel. This addresses the startup gap where MCP connected but the first task could wait until someone typed into the child pane.
+Codex sessions can recover AX tools after an MCP client reconnects. Agent discovery now shows mailbox backlog and why delivery is waiting, and Claude keeps its readiness during compaction.
 
-## Claude pane startup
+## Messaging recovery
 
-For recognized option-only Claude pane launches, AX waits until the model calls an AX tool before activating queued delivery. That call clears the startup hold durably, even if the request then fails during a resource cooldown or broker outage. Normal native binding, current launch ownership, permissions, and cooldown checks still apply.
+Codex can retain multiple MCP clients for the same conversation. Previously one could hold the broker lease while the model called another, causing message retrieval to time out even though incoming wakes reached the native queue. A fresh tool call can now reclaim the lease only when its native conversation, current launch and credentials match. Background clients and automatic retries cannot take it back. Accepted messages remain in the mailbox; recovery does not resend tasks.
 
-Reconnecting the bridge does not repeat the setup turn or replay a task. Explicit native prompts, resume commands, and unfamiliar syntax pass through without an added prompt. Debug and strict MCP configuration options are covered. Business task text remains in AX's mailbox.
+Canceled bridge helpers can now exit while their MCP input pipe is idle. This closes the cleanup failure that left duplicate helpers behind after cancellation.
 
-Covered launches add one model setup turn. Native login, workspace trust, tool approvals, and Channel confirmation remain under the harness's controls.
+## Delivery diagnostics
+
+Local agent discovery reports queued and unacknowledged counts, the oldest unresolved message, and the reason mail is waiting. Known permission prompts and user questions are identified without exposing message contents. Status remains separate from proof of receipt or task completion.
+
+A send that the broker definitely refuses before storing anything reports that nothing was sent, with a recovery step. Rate-limit refusals include a retry delay. An earlier attempt with a lost response remains uncertain. Database lookup failures retain their original error rather than being mistaken for an invalid message ID.
+
+Claude compaction keeps its current readiness and effective native permissions. Test fixtures also ignore AX identity and policy variables inherited from a developer's active session.
 
 ## Install and update
 
@@ -18,12 +24,12 @@ curl -fsSL https://useax.dev/install.sh | sh
 
 Or ask your agent to follow [AGENTS.md](https://useax.dev/agents.md). Prebuilt binaries support macOS and Linux on ARM64 and x86_64. Windows uses WSL 2.
 
-The startup fix needs the updated launcher and bridge. Installing the binary does not replace a running bridge. Let existing work finish, close the AX-launched session normally, and relaunch its saved name before testing a new pane. See the [running-session update guide](https://useax.dev/docs/installation#updating-running-sessions) for a complete runtime update.
+The Codex ownership fix needs both the updated broker and bridge. Replacing the installed binary does not update already running helpers. Let active work finish and follow the [running-session update guide](https://useax.dev/docs/installation#updating-running-sessions). Preserve saved AX names when relaunching.
 
-There is no mailbox schema change from 0.8.0 or 0.8.1. Upgrading from 0.7.x still requires the schema-4 backup precautions in that guide; a 0.7.x broker cannot open the upgraded mailbox.
+There is no mailbox schema change from 0.8.x. Upgrading from 0.7.x still requires the schema-4 backup precautions in that guide; a 0.7.x broker cannot open the upgraded mailbox.
 
 ## Verification
 
-Regression tests cover queued first-task release, a failed setup call during cooldown, stale-launch protection, native argument preservation, and no duplicate offer after bridge replacement. The release workflow checks race tests, vet, four native builds, installer behavior, and WSL installation.
+Focused regressions cover accepted-message retrieval after lease replacement, displaced-client retries, launch and conversation fencing, canceled input readers, compaction state, definite-refusal recovery, database failures, and discovery diagnostics. The release workflow gates publication on race tests, vet, four native builds, installer verification, and WSL installation.
 
-These checks do not establish native cold-start receipt on every machine. [Issue 82](https://github.com/summationai/agent-exchange/issues/82) stays open for live verification and the separate idle-wake cases. The missing-server banner alone does not identify the cause of a stalled session.
+Native messaging recovery on this Mac is tracked separately from automated transport tests. These checks do not establish every harness lifecycle on every platform; [issue 82](https://github.com/summationai/agent-exchange/issues/82) retains the separate Claude cold-start and idle-wake validation work.

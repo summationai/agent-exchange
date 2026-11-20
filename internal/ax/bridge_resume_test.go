@@ -293,6 +293,8 @@ func TestWaitingClaimRetriesAfterBrokerNativeBinding(t *testing.T) {
 
 func TestBridgeCLIExitsWhileInheritedStdinIsIdle(t *testing.T) {
 	if os.Getenv("AX_TEST_BRIDGE_CHILD") == "1" {
+		// TestMain clears inherited AX identity; restore only this child fixture.
+		os.Setenv("AX_SESSION_FILE", os.Getenv("AX_TEST_BRIDGE_FILE"))
 		if err := Main([]string{"bridge"}); err != nil {
 			os.Exit(1)
 		}
@@ -305,7 +307,7 @@ func TestBridgeCLIExitsWhileInheritedStdinIsIdle(t *testing.T) {
 		t.Fatal(err)
 	}
 	cmd := exec.Command(os.Args[0], "-test.run=^TestBridgeCLIExitsWhileInheritedStdinIsIdle$")
-	cmd.Env = append(os.Environ(), "AX_HOME="+dir, "AX_SESSION_FILE="+file, "AX_TEST_BRIDGE_CHILD=1")
+	cmd.Env = append(os.Environ(), "AX_HOME="+dir, "AX_TEST_BRIDGE_FILE="+file, "AX_TEST_BRIDGE_CHILD=1")
 	in, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -340,5 +342,31 @@ func TestBridgeCLIExitsWhileInheritedStdinIsIdle(t *testing.T) {
 		cmd.Process.Kill()
 		<-done
 		t.Fatal("SIGTERM left bridge blocked on inherited stdin")
+	}
+}
+
+func TestDisplacedToolRetryCannotReclaimBridge(t *testing.T) {
+	dir := startTestServer(t)
+	s := Session{ID: randomID("agt_"), Secret: randomID(""), Name: "reviewer", Host: "codex", Mesh: testMesh, Native: uuid(), Started: true}
+	replacement := connectDiscoveryPeer(t, dir, s)
+	file := filepath.Join(dir, "reviewer.json")
+	if err := saveSession(file, s); err != nil {
+		t.Fatal(err)
+	}
+	x, y := net.Pipe()
+	old := newClient(x)
+	defer y.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	b := &bridge{ctx: ctx, dir: dir, file: file, session: s, c: old, out: io.Discard}
+	done := make(chan struct{})
+	go func() { defer close(done); b.connectLoop() }()
+	defer func() { cancel(); old.close(); <-done }()
+	// The displaced client's in-flight heartbeat loses its response when fenced.
+	go func() { readFrame(y); y.Close() }()
+	callCtx, stop := context.WithTimeout(ctx, 350*time.Millisecond)
+	defer stop()
+	_ = b.toolCall(callCtx, raw(object{"threadId": s.Native}), "ax.list", object{}, nil)
+	if err := replacement.call("ax.heartbeat", object{}, nil); err != nil {
+		t.Fatalf("automatic retry fenced the replacement owner: %v", err)
 	}
 }

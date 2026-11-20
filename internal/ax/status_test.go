@@ -696,3 +696,30 @@ func TestDiscoveryReasonBoundsUnrecognizedPermission(t *testing.T) {
 		t.Fatal("discovery repeats an unbounded native permission mode")
 	}
 }
+
+func TestRecipientStatusHonorsCurrentHoldsAfterWake(t *testing.T) {
+	b, _ := localBroker(t)
+	sender, from, _ := endpoint(t, b, "sender", testMesh)
+	recipient, to, _ := endpoint(t, b, "recipient", testMesh)
+	sent := request(t, b, from, "ax.send", object{"target": recipient.ID, "text": "held private task", "client_message_id": "current-hold"}).(Message)
+	if err := b.event(sent.ID, "wake_accepted", 1); err != nil {
+		t.Fatal(err)
+	}
+	for _, hold := range []string{"policy", "recipient-permission", "sender-permission"} {
+		b.peers[recipient.ID].Policy = "accept"
+		b.peers[recipient.ID].Permission = "read-only"
+		b.peers[sender.ID].Permission = "read-only"
+		switch hold {
+		case "policy":
+			b.peers[recipient.ID].Policy = "hold"
+		case "recipient-permission":
+			b.peers[recipient.ID].Permission = "unknown"
+		case "sender-permission":
+			b.peers[sender.ID].Permission = "unknown"
+		}
+		status, err := b.request(to, "ax.status", raw(object{"message_id": sent.ID}))
+		if err != nil || strings.Contains(string(raw(status)), "held private task") || status.(object)["content_withheld"] != true {
+			t.Fatalf("%s bypassed status visibility: %s %v", hold, raw(status), err)
+		}
+	}
+}

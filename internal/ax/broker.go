@@ -800,12 +800,17 @@ func (b *broker) request(c *serverConn, method string, params json.RawMessage) (
 			if err != nil {
 				return nil, err
 			}
-			if m.Recipient == p.ID && (m.State == "queued" || m.State == "expired" || m.State == "refused" || m.State == "abandoned") {
-				// Retain delivery evidence, including terminal owner decisions,
-				// without exposing content that may never have been offered.
-				m.Text, m.Data, m.Provenance = "", nil, nil
-				result.(object)["message"] = m
-				result.(object)["content_withheld"] = true
+			if m.Recipient == p.ID {
+				visible, err := b.incomingContentVisible(p, m)
+				if err != nil {
+					return nil, err
+				}
+				if !visible {
+					// Retain receipts without bypassing current delivery holds.
+					m.Text, m.Data, m.Provenance = "", nil, nil
+					result.(object)["message"] = m
+					result.(object)["content_withheld"] = true
+				}
 			}
 			return result, nil
 		}

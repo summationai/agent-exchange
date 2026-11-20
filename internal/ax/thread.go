@@ -128,13 +128,11 @@ func (b *broker) thread(p *peer, id, after string) (threadPage, error) {
 		item := threadMessage{Message: m}
 		item.Thread = root
 		if item.Sender.ID != p.ID {
-			sender, err := b.messagePeer(b.db, item.Sender.ID)
+			visible, err := b.incomingContentVisible(p, item.Message)
 			if err != nil {
 				return out, err
 			}
-			state := item.State
-			offered := state == "handoff_started" || state == "delivery_uncertain" || state == "wake_accepted" || state == "channel_written" || state == "content_served" || state == "acknowledged"
-			if !offered || p.Policy != "accept" || !safe(p) || !safe(sender) || !externalHandoff(p, item.Message) || !b.networkHandoffAllowed(item.Message, p) {
+			if !visible {
 				item.Text = ""
 				item.Data, item.Provenance = nil, nil
 				item.Withheld = true
@@ -148,4 +146,15 @@ func (b *broker) thread(p *peer, id, after string) (threadPage, error) {
 		out.Messages = append(out.Messages, item)
 	}
 	return out, nil
+}
+
+// Status and retained history must honor the same current delivery holds.
+func (b *broker) incomingContentVisible(p *peer, m Message) (bool, error) {
+	sender, err := b.messagePeer(b.db, m.Sender.ID)
+	if err != nil {
+		return false, err
+	}
+	state := m.State
+	offered := state == "handoff_started" || state == "delivery_uncertain" || state == "wake_accepted" || state == "channel_written" || state == "content_served" || state == "acknowledged"
+	return offered && p.Policy == "accept" && safe(p) && safe(sender) && externalHandoff(p, m) && b.networkHandoffAllowed(m, p), nil
 }

@@ -664,7 +664,11 @@ func TestDiscoveryDoesNotExposeHeldIncomingContent(t *testing.T) {
 		}
 	}
 	for _, c := range []*serverConn{from, {}} {
-		status, err := b.request(c, "ax.status", raw(object{"message_id": sent.ID}))
+		method := "ax.status"
+		if c.agent == "" {
+			method = "ax.inspect_message"
+		}
+		status, err := b.request(c, method, raw(object{"message_id": sent.ID}))
 		if err != nil || !strings.Contains(string(raw(status)), "held private task") {
 			t.Fatal("sender or owner lost inspection", err)
 		}

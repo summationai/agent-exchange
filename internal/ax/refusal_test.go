@@ -315,3 +315,21 @@ func TestLaterRefusalCannotEraseLostOutcome(t *testing.T) {
 		}
 	}
 }
+
+func TestNetworkReceiveKeepsGenericRefusal(t *testing.T) {
+	a, b := pairedNetworkBrokers(t)
+	web, from, _ := endpoint(t, a, "web", testMesh)
+	api, to, _ := endpoint(t, b, "api", testMesh)
+	request(t, a, &serverConn{}, "ax.network.sync", object{"alias": "buildbox", "agents": []networkAgent{{ID: api.ID, Name: api.Name, Host: api.Host, State: "ready"}}})
+	request(t, a, from, "ax.send", object{"target": "api@buildbox", "text": "task", "client_message_id": "network-refusal"})
+	envelope := request(t, a, &serverConn{}, "ax.network.outbox", object{"alias": "buildbox"}).(*networkEnvelope)
+	if envelope == nil || envelope.SenderID != web.ID {
+		t.Fatal("missing envelope")
+	}
+	request(t, b, to, "ax.policy", object{"policy": "refuse"})
+	_, err := b.request(&serverConn{}, "ax.network.receive", raw(object{"alias": "laptop", "envelope": envelope}))
+	var rpc *rpcError
+	if err == nil || errors.As(err, &rpc) {
+		t.Fatalf("local refusal code leaked onto network RPC: %v", err)
+	}
+}

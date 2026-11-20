@@ -27,7 +27,7 @@ Failures include structured fields in addition to their JSON text representation
 response. It does not mean delivery failed. A broker error after submission is
 also treated conservatively because it can report a commit failure.
 
-A send, reply, resend or follow-up that the broker refuses before storing anything, such as one to an unknown target, is the exception: it reports `code: request_refused` and `submission: not_submitted`, and its `recovery` says what to change. Only a rate-limited send is `retryable`, after `retry_after_ms`. When an earlier attempt of the same call lost its response, a refused retry stays `outcome_unknown`.
+Most sends, replies, resends or follow-ups that the broker refuses before storing anything, such as one to an unknown target, are the exception: it reports `code: request_refused` and `submission: not_submitted`, and its `recovery` says what to change. Only a rate-limited send is `retryable`, after `retry_after_ms`. External-policy and reply-depth refusals retain their distinct `external_policy` and `reply_depth_limit` codes. When an earlier attempt of the same call lost its response, any refused retry stays `outcome_unknown`.
 
 ## Recover a missed wake
 

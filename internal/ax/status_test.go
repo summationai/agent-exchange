@@ -659,8 +659,8 @@ func TestDiscoveryDoesNotExposeHeldIncomingContent(t *testing.T) {
 			}
 		}
 		result, err := b.request(to, "ax.status", raw(object{"message_id": sent.ID}))
-		if err == nil {
-			t.Fatalf("recipient status exposed %s unoffered mail: %s", state, raw(result))
+		if err != nil || strings.Contains(string(raw(result)), "held private task") || strings.Contains(string(raw(result)), "held structured content") || result.(object)["content_withheld"] != true {
+			t.Fatalf("recipient status exposed %s unoffered mail or lost diagnostics: %s %v", state, raw(result), err)
 		}
 	}
 	for _, c := range []*serverConn{from, {}} {
@@ -684,5 +684,15 @@ func TestBindingConflictDoesNotInheritBlockedClock(t *testing.T) {
 	entry := listedAgent(t, request(t, b, &serverConn{}, "ax.inspect", object{}), "conflicted")
 	if entry["state"] != "binding-conflict" || entry["state_changed_at_ms"] != nil {
 		t.Fatalf("conflict inherited old permission clock: %v", entry)
+	}
+}
+
+func TestDiscoveryReasonBoundsUnrecognizedPermission(t *testing.T) {
+	b, _ := localBroker(t)
+	s, _, _ := endpoint(t, b, "peer", testMesh)
+	p := b.peers[s.ID]
+	p.Permission = strings.Repeat("unrecognized", 4096)
+	if reason := permissionBlockReason("Recipient", p); len(reason) > 1024 {
+		t.Fatal("discovery repeats an unbounded native permission mode")
 	}
 }

@@ -231,7 +231,7 @@ func reportedCause(state string, c *stateCause) stateCause {
 }
 
 func permissionBlockReason(role string, p *peer) string {
-	reason := fmt.Sprintf("%s %q has permission mode %q, which blocks AX delivery. ", role, p.Name, p.Permission)
+	reason := fmt.Sprintf("%s %q has permission mode %q, which blocks AX delivery. ", role, p.Name, fmt.Sprintf("%.80s", p.Permission))
 	switch p.Permission {
 	case "bypassPermissions", "danger-full-access":
 		return reason + "If this native bypass mode is intentional, the user can relaunch the same saved AX name with AX_ALLOW_BYPASS=1; this opts into AX messaging without changing native permissions. Otherwise, use a supported native permission mode. Restarting without changing either setting does not clear the block."

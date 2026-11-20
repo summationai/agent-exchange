@@ -796,10 +796,18 @@ func (b *broker) request(c *serverConn, method string, params json.RawMessage) (
 			if m.Sender.ID != p.ID && m.Recipient != p.ID {
 				return nil, errors.New("message not accessible")
 			}
-			if m.Recipient == p.ID && (m.State == "queued" || m.State == "expired" || m.State == "refused" || m.State == "abandoned") {
-				return nil, errors.New("message has not been offered; sender or owner can inspect delivery status")
+			result, err := b.status(m.ID)
+			if err != nil {
+				return nil, err
 			}
-			return b.status(m.ID)
+			if m.Recipient == p.ID && (m.State == "queued" || m.State == "expired" || m.State == "refused" || m.State == "abandoned") {
+				// Retain delivery evidence, including terminal owner decisions,
+				// without exposing content that may never have been offered.
+				m.Text, m.Data, m.Provenance = "", nil, nil
+				result.(object)["message"] = m
+				result.(object)["content_withheld"] = true
+			}
+			return result, nil
 		}
 		if m.Recipient != p.ID {
 			return nil, errors.New("message is addressed to another endpoint")

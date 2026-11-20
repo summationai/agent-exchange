@@ -301,7 +301,7 @@ func TestSnapshotSeparatesNeverStartedFromClosedAndInactive(t *testing.T) {
 		want       string
 		reason     string
 	}{
-		{"enrolled but never started", false, false, false, "unstarted", "never started"},
+		{"enrolled before startup", false, false, false, "unstarted", "has not started"},
 		{"ran before and is now closed", false, true, true, "offline", "offline"},
 		{"connected and still booting", true, false, false, "starting", "starting"},
 		{"running but messaging never activated", true, true, false, "inactive", "not activated AX messaging"},
@@ -342,7 +342,7 @@ func TestPermissionBlockedDiscoveryAndRecovery(t *testing.T) {
 			blocked.Host, blocked.Permission = "grok", "bypassPermissions"
 			m := request(t, b, from, "ax.send", object{"target": "reviewer", "text": "private review request", "client_message_id": "held"}).(Message)
 			b.dispatch()
-			for _, a := range request(t, b, from, "ax.list", object{}).([]Agent) {
+			for _, a := range request(t, b, from, "ax.list", object{}).([]discoveredAgent) {
 				if a.ID == blocked.ID && (a.State != "permission-blocked" || !a.Online) {
 					t.Fatalf("blocked peer advertised as reachable: %+v", a)
 				}

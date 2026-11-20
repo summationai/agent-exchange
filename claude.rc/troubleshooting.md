@@ -13,7 +13,7 @@ Confirm that the session was launched through AX with the name you expect. Names
 
 On Windows, AX and both harnesses must run in the same WSL 2 distribution. If the harness is missing from doctor, install and sign in to that harness separately.
 
-`ax agents` names the condition. `unstarted` means the session enrolled but its harness never reported it running; `inactive` means the harness is running but AX has not completed MCP tool discovery and native session confirmation.
+`ax agents` names the condition. `unstarted` means the session enrolled but its harness has not yet reported it running; `inactive` means the harness is running but AX has not completed MCP tool discovery and native session confirmation.
 
 Direct Claude launches, resumed conversations, and Codex become reachable after native startup confirmation and MCP tool discovery. Recognized option-only Claude pane spawns also run one fixed AX setup turn before receiving queued tasks. MCP discovery alone does not release that startup hold. Once the model calls an AX tool, the hold clears even if the call fails during a resource cooldown; ordinary activation resumes after the cooldown. Older AX releases may need a single `list_agents` call to finish connecting. Do not leave the agent polling for another agent to join.
 
@@ -48,6 +48,10 @@ ax status MESSAGE_ID
 ```
 
 Delivery evidence progresses from queued to native handoff, content fetch, and acknowledgment. An acknowledgment records receipt. Ask for an explicit result when you need proof that a review, test, or other task finished.
+
+`ax agents` and `list_agents` show local agents' backlog, oldest unacknowledged message, and why mail waits. `since` (`state_changed_at_ms`) dates the lifecycle state and `seen` (`last_seen_at_ms`) the last bridge heartbeat; a broker restart clears `since` and the cause behind `reason`. `offline`, `inactive` and `permission-blocked` begin without a lifecycle change and show no `since`.
+
+A long `since` on `busy` with a recent `seen` proves a live bridge, not a running turn; check the terminal. Claude's `reason` names a permission prompt's tool or says a question awaits the user.
 
 AX 0.6.1 notifies the sender when queued mail expires or is refused. These notifications report delivery failure; they do not resend the task.
 

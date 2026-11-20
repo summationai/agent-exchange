@@ -652,14 +652,33 @@ func TestDiscoveryDoesNotExposeHeldIncomingContent(t *testing.T) {
 	if entry["head_message_id"] != sent.ID {
 		t.Fatal("discovery did not expose the held message ID")
 	}
-	result, err := b.request(to, "ax.status", raw(object{"message_id": sent.ID}))
-	if err == nil {
-		t.Fatalf("recipient status exposed unoffered mail: %s", raw(result))
+	for _, state := range []string{"queued", "expired", "refused", "abandoned"} {
+		if state != "queued" {
+			if err := b.event(sent.ID, state, 1); err != nil {
+				t.Fatal(err)
+			}
+		}
+		result, err := b.request(to, "ax.status", raw(object{"message_id": sent.ID}))
+		if err == nil {
+			t.Fatalf("recipient status exposed %s unoffered mail: %s", state, raw(result))
+		}
 	}
 	for _, c := range []*serverConn{from, {}} {
 		status, err := b.request(c, "ax.status", raw(object{"message_id": sent.ID}))
 		if err != nil || !strings.Contains(string(raw(status)), "held private task") {
 			t.Fatal("sender or owner lost inspection", err)
 		}
+	}
+}
+
+func TestBindingConflictDoesNotInheritBlockedClock(t *testing.T) {
+	b, _ := localBroker(t)
+	s, c, _ := endpoint(t, b, "conflicted", testMesh)
+	request(t, b, c, "ax.presence", object{"state": "blocked"})
+	b.peers[s.ID].stateSince = time.Now().Add(-time.Hour)
+	request(t, b, c, "ax.presence", object{"binding_error": "conversation mismatch", "state": "blocked"})
+	entry := listedAgent(t, request(t, b, &serverConn{}, "ax.inspect", object{}), "conflicted")
+	if entry["state"] != "binding-conflict" || entry["state_changed_at_ms"] != nil {
+		t.Fatalf("conflict inherited old permission clock: %v", entry)
 	}
 }

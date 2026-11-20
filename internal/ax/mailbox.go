@@ -287,7 +287,7 @@ func (b *broker) discovery() []discoveredAgent {
 		// and a permission hold or an inactive bridge begins without a lifecycle
 		// change, so those states carry no time; last_seen_at_ms dates offline.
 		switch out[i].State {
-		case "offline", "inactive", "permission-blocked":
+		case "offline", "inactive", "permission-blocked", "binding-conflict":
 		default:
 			if !p.stateSince.IsZero() {
 				s.StateChanged = p.stateSince.UnixMilli()

@@ -796,7 +796,7 @@ func (b *broker) request(c *serverConn, method string, params json.RawMessage) (
 			if m.Sender.ID != p.ID && m.Recipient != p.ID {
 				return nil, errors.New("message not accessible")
 			}
-			if m.Recipient == p.ID && m.State == "queued" {
+			if m.Recipient == p.ID && (m.State == "queued" || m.State == "expired" || m.State == "refused" || m.State == "abandoned") {
 				return nil, errors.New("message has not been offered; sender or owner can inspect delivery status")
 			}
 			return b.status(m.ID)

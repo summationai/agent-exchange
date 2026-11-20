@@ -641,3 +641,25 @@ func TestRemotePeersKeepTheirDiscoveryFields(t *testing.T) {
 		t.Fatalf("local peer lost its counts next to a remote one: %v", web)
 	}
 }
+
+func TestDiscoveryDoesNotExposeHeldIncomingContent(t *testing.T) {
+	b, _ := localBroker(t)
+	_, from, _ := endpoint(t, b, "sender", testMesh)
+	recipient, to, _ := endpoint(t, b, "recipient", testMesh)
+	request(t, b, &serverConn{}, "ax.policy", object{"target": recipient.ID, "policy": "hold"})
+	sent := request(t, b, from, "ax.send", object{"target": recipient.ID, "text": "held private task", "client_message_id": "held-content", "data": object{"private": "held structured content"}}).(Message)
+	entry := listedAgent(t, request(t, b, to, "ax.list", object{}), "recipient")
+	if entry["head_message_id"] != sent.ID {
+		t.Fatal("discovery did not expose the held message ID")
+	}
+	result, err := b.request(to, "ax.status", raw(object{"message_id": sent.ID}))
+	if err == nil {
+		t.Fatalf("recipient status exposed unoffered mail: %s", raw(result))
+	}
+	for _, c := range []*serverConn{from, {}} {
+		status, err := b.request(c, "ax.status", raw(object{"message_id": sent.ID}))
+		if err != nil || !strings.Contains(string(raw(status)), "held private task") {
+			t.Fatal("sender or owner lost inspection", err)
+		}
+	}
+}

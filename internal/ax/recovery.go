@@ -28,7 +28,13 @@ func (b *bridge) toolCall(ctx context.Context, meta json.RawMessage, method stri
 			break
 		}
 		var c *client
-		c, err = b.connection(ctx)
+		if attempt == 0 {
+			c, err = b.connection(ctx, meta)
+		} else {
+			// An automatic retry cannot reverse a newer client's handoff.
+			// Only a fresh host tool invocation may claim this conversation.
+			c, err = b.connection(ctx)
+		}
 		if err != nil {
 			break
 		}

@@ -541,13 +541,13 @@ Ask either agent to message another by name.
 		stopResources := watchResources(context.Background(), dir, cancel, func() { os.Exit(75) })
 		defer stopResources()
 		return networkCLI(ctx, dir, args[1:], os.Stdin, os.Stdout)
-	case "attach":
+	case "attach", "bridge":
 		inputInfo, err := os.Stdin.Stat()
 		if err != nil {
 			return err
 		}
 		if inputInfo.Mode()&os.ModeCharDevice != 0 {
-			return errors.New("configure ax attach as an MCP child with piped stdin; it is not an interactive terminal command")
+			return fmt.Errorf("configure ax %s as an MCP child with piped stdin; it is not an interactive terminal command", args[0])
 		}
 		// NewFile registers a nonblocking pipe with Go's poller, allowing Close
 		// to interrupt an idle MCP read when SIGTERM cancels this child.
@@ -568,6 +568,9 @@ Ask either agent to message another by name.
 		}
 		input := os.NewFile(uintptr(fd), "AX MCP input")
 		defer input.Close()
+		if args[0] == "bridge" {
+			return runBridge(ctx, dir, os.Getenv("AX_SESSION_FILE"), input, os.Stdout, func() { os.Exit(75) })
+		}
 		return attach(ctx, dir, args[1:], input, os.Stdout, func() { os.Exit(75) })
 	case "verify":
 		if len(args) != 2 || !validName.MatchString(args[1]) {
@@ -601,8 +604,6 @@ Ask either agent to message another by name.
 		return Serve(ctx, dir)
 	case "claude", "codex", "grok", "opencode", "pi":
 		return Launch(ctx, dir, args[0], args[1:])
-	case "bridge":
-		return runBridge(ctx, dir, os.Getenv("AX_SESSION_FILE"), os.Stdin, os.Stdout, func() { os.Exit(75) })
 	case "hook":
 		// A resource pause must not block a native permission or lifecycle hook.
 		if err := resourcePause(dir, time.Now()); err != nil {

@@ -836,6 +836,13 @@ func (b *broker) request(c *serverConn, method string, params json.RawMessage) (
 			return nil, errors.New("message has not been offered")
 		}
 		if method == "ax.get_message" {
+			visible, err := b.incomingContentVisible(p, m)
+			if err != nil {
+				return nil, err
+			}
+			if !visible {
+				return nil, errors.New("message content is held by the current permission or policy")
+			}
 			if m.State != "acknowledged" && m.State != "content_served" {
 				if e = b.event(m.ID, "content_served", p.epoch); e != nil {
 					return nil, e

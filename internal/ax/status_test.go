@@ -739,5 +739,11 @@ func TestRecipientStatusHonorsCurrentHoldsAfterWake(t *testing.T) {
 		if err != nil || strings.Contains(string(raw(status)), "held private task") || status.(object)["content_withheld"] != true {
 			t.Fatalf("%s bypassed status visibility: %s %v", hold, raw(status), err)
 		}
+		if result, err := b.request(to, "ax.get_message", raw(object{"message_id": sent.ID})); err == nil {
+			t.Fatalf("%s bypassed fetch visibility: %s", hold, raw(result))
+		}
+		if saved, err := b.message(sent.ID); err != nil || saved.State != "wake_accepted" {
+			t.Fatalf("denied fetch recorded content receipt: %s %v", saved.State, err)
+		}
 	}
 }

@@ -229,8 +229,7 @@ func inactiveAgyBridge(in io.Reader, out io.Writer) error {
 // Hooks report native identity and readiness, never peer bodies or receipts.
 // The shared check_inbox tool is the sole content gate.
 func agyHook(dir, file, event string, in io.Reader, out io.Writer) error {
-	result := object{}
-	defer func() { _ = json.NewEncoder(out).Encode(result) }()
+	defer func() { _ = json.NewEncoder(out).Encode(object{}) }()
 	s, active := activeAgySession(file)
 	if !active {
 		return nil
@@ -251,34 +250,21 @@ func agyHook(dir, file, event string, in io.Reader, out io.Writer) error {
 	if event != "SessionStart" && event != "PreInvocation" && event != "Stop" {
 		return errors.New("unsupported Antigravity hook")
 	}
-	state := "busy"
+	hostEvent := "AgyBusy"
 	if event == "SessionStart" || event == "Stop" && input.Idle {
-		state = "ready"
+		hostEvent = "SessionStart"
 	}
 
 	// Reuse the shared lifecycle path, including its persistent binding-conflict
 	// guard, so switching conversations cannot keep using the previous identity.
-	report := func(event string) error {
-		return Hook(dir, file, bytes.NewReader(raw(object{"session_id": input.Native, "hook_event_name": event, "permission_mode": "unverified"})), s.LaunchID)
-	}
-	if err := report("SessionStart"); err != nil {
+	payload := raw(object{"session_id": input.Native, "hook_event_name": hostEvent, "permission_mode": "unverified"})
+	if err := Hook(dir, file, bytes.NewReader(payload), s.LaunchID); err != nil {
 		return err
-	}
-	if state == "busy" {
-		if err := report("UserPromptSubmit"); err != nil {
-			return err
-		}
 	}
 	// Only a model invocation opens delivery. Startup and Stop report native
 	// state but leave mail queued until the next verified invocation.
 	if event == "PreInvocation" {
-		if err := confirmAgyBinding(file, s.LaunchID, input.Native, generation); err != nil {
-			return err
-		}
-	}
-	if event == "SessionStart" || event == "PreInvocation" && !s.Started {
-		result["injectSteps"] = []object{{"systemMessage": object{"systemMessage": agyInstructions}}}
-		return nil
+		return confirmAgyBinding(file, s.LaunchID, input.Native, generation)
 	}
 	return nil
 }

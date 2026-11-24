@@ -210,8 +210,8 @@ func TestAgyHooksBindWithoutServingContentAndUseSharedInbox(t *testing.T) {
 		}
 		return result
 	}
-	if hook("SessionStart", "", false)["injectSteps"] == nil {
-		t.Fatal("startup guidance missing")
+	if len(hook("SessionStart", "", false)) != 0 {
+		t.Fatal("startup hook modified the native conversation")
 	}
 	saved, _ := loadSession(file)
 	if saved.Native != native || !saved.Started {
@@ -232,7 +232,10 @@ func TestAgyHooksBindWithoutServingContentAndUseSharedInbox(t *testing.T) {
 		}
 	})
 	mcp := &attachedMCP{conn: host, read: json.NewDecoder(host)}
-	mcp.rpc(t, "initialize", object{"protocolVersion": "2025-11-25"})
+	init := mcp.rpc(t, "initialize", object{"protocolVersion": "2025-11-25"})
+	if !bytes.Contains(init, []byte("call the AX check_inbox tool once")) {
+		t.Fatal("AX guidance missing from the active MCP session")
+	}
 	mcp.rpc(t, "tools/list", object{})
 	if err := mcp.call(t, "list_agents", object{}, nil); err == "" {
 		t.Fatal("startup opened delivery before the first invocation")

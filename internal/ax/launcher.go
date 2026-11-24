@@ -419,7 +419,8 @@ func Hook(dir, file string, in io.Reader, launch ...string) error {
 	if s.BindingError != "" {
 		return errors.New(s.BindingError)
 	}
-	if input.Event == "SessionStart" && (s.Native == "" || (!s.Started && s.LaunchID != "" && s.Host != "agy")) {
+	bind := input.Event == "SessionStart" || s.Host == "agy" && input.Event == "AgyBusy"
+	if bind && (s.Native == "" || (!s.Started && s.LaunchID != "" && s.Host != "agy")) {
 		if s.Native != input.Session {
 			s.ClaudePending = ""
 			s.NativeFile = ""
@@ -430,7 +431,7 @@ func Hook(dir, file string, in io.Reader, launch ...string) error {
 		}
 	}
 	if input.Session != s.Native {
-		if input.Event == "SessionStart" {
+		if bind {
 			conflict := bindingConflict(s, input.Session)
 			s.Started, s.BindingError = false, conflict.Error()
 			if e = saveSession(file, s); e != nil {
@@ -451,13 +452,13 @@ func Hook(dir, file string, in io.Reader, launch ...string) error {
 	if persisted {
 		s.ClaudePending = ""
 	}
-	if input.Event == "SessionStart" {
+	if bind {
 		if s.Host == "pi" && input.File != "" && filepath.IsAbs(input.File) {
 			s.NativeFile = input.File
 		}
 		s.Started = true
 	}
-	if input.Event == "SessionStart" || persisted {
+	if bind || persisted {
 		if e = saveSession(file, s); e != nil {
 			return e
 		}

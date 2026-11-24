@@ -379,26 +379,38 @@ func TestAgyHooksBindWithoutServingContentAndUseSharedInbox(t *testing.T) {
 	}
 }
 
-func TestAgyInactiveHookAvoidsResourceAccounting(t *testing.T) {
-	if os.Getenv("AX_TEST_AGY_INACTIVE_HOOK") == "1" {
-		if err := Main([]string{"agy-hook", "PreInvocation"}); err != nil {
+func TestAgyInactivePluginWorksWithoutRuntime(t *testing.T) {
+	if command := os.Getenv("AX_TEST_AGY_INACTIVE"); command != "" {
+		if err := Main([]string{command, "PreInvocation"}); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
 		os.Exit(0)
 	}
-	dir := testDir(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestAgyInactiveHookAvoidsResourceAccounting$")
-	cmd.Env = append(os.Environ(), "AX_TEST_AGY_INACTIVE_HOOK=1", "AX_HOME="+dir, "HOME="+testDir(t))
-	data, err := cmd.CombinedOutput()
-	if err != nil || string(bytes.TrimSpace(data)) != "{}" {
-		t.Fatalf("inactive hook: %q, %v", data, err)
+	dir := filepath.Join(testDir(t), "missing")
+	blocked := filepath.Join(testDir(t), "not-a-directory")
+	if err := os.WriteFile(blocked, nil, 0600); err != nil {
+		t.Fatal(err)
 	}
-	entries, err := os.ReadDir(dir)
-	if err != nil || len(entries) != 0 {
-		t.Fatal("ordinary Antigravity wrote AX runtime or resource state", entries, err)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for _, command := range []string{"agy-hook", "agy-bridge"} {
+		for _, axHome := range []string{dir, blocked} {
+			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestAgyInactivePluginWorksWithoutRuntime$")
+			cmd.Env = append(os.Environ(), "AX_TEST_AGY_INACTIVE="+command, "AX_HOME="+axHome)
+			cmd.Stdin = strings.NewReader("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}\n")
+			data, err := cmd.CombinedOutput()
+			want := "{}"
+			if command == "agy-bridge" {
+				want = `"tools":[]`
+			}
+			if err != nil || !bytes.Contains(data, []byte(want)) {
+				t.Fatalf("inactive %s: %q, %v", command, data, err)
+			}
+		}
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatal("ordinary Antigravity created AX runtime storage", err)
 	}
 }
 

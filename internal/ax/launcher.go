@@ -544,9 +544,26 @@ Ask either agent to message another by name.
 		defer cancel()
 		return runSpawn(ctx, args[1], args[2], args[3])
 	}
-	dir, e := dataDir()
-	if e != nil {
-		return e
+	var agy Session
+	var agyFile string
+	inactiveAgy := false
+	if args[0] == "agy-hook" || args[0] == "agy-bridge" {
+		agyFile = os.Getenv("AX_SESSION_FILE")
+		var active bool
+		agy, active = activeAgySession(agyFile)
+		inactiveAgy = !active
+		if args[0] == "agy-hook" && inactiveAgy {
+			fmt.Fprintln(os.Stdout, "{}")
+			return nil
+		}
+	}
+	var dir string
+	if !inactiveAgy {
+		var err error
+		dir, err = dataDir()
+		if err != nil {
+			return err
+		}
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM)
 	defer cancel()
@@ -591,11 +608,11 @@ Ask either agent to message another by name.
 		input := os.NewFile(uintptr(fd), "AX MCP input")
 		defer input.Close()
 		if args[0] == "agy-bridge" {
-			if _, active := activeAgySession(os.Getenv("AX_SESSION_FILE")); !active {
+			if inactiveAgy {
 				go func() { <-ctx.Done(); input.Close() }()
 				return inactiveAgyBridge(input, os.Stdout)
 			}
-			return runBridge(ctx, dir, os.Getenv("AX_SESSION_FILE"), input, os.Stdout, func() { os.Exit(75) })
+			return runBridge(ctx, dir, agyFile, input, os.Stdout, func() { os.Exit(75) })
 		}
 		if args[0] == "bridge" {
 			return runBridge(ctx, dir, os.Getenv("AX_SESSION_FILE"), input, os.Stdout, func() { os.Exit(75) })
@@ -637,14 +654,8 @@ Ask either agent to message another by name.
 		if len(args) != 2 {
 			return errors.New("usage: ax agy-hook EVENT")
 		}
-		file := os.Getenv("AX_SESSION_FILE")
-		s, active := activeAgySession(file)
-		if !active {
-			fmt.Fprintln(os.Stdout, "{}")
-			return nil
-		}
 		if err := resourcePause(dir, time.Now()); err != nil {
-			if _, err := suspendAgyBinding(file, s.LaunchID); err != nil {
+			if _, err := suspendAgyBinding(agyFile, agy.LaunchID); err != nil {
 				fmt.Fprintln(os.Stderr, "AX Antigravity binding:", err)
 			}
 			fmt.Fprintln(os.Stdout, "{}")
@@ -655,7 +666,7 @@ Ask either agent to message another by name.
 				_, _ = reportCPU(dir, time.Now(), cpu)
 			}
 		}()
-		if err := agyHook(dir, file, args[1], os.Stdin, os.Stdout); err != nil {
+		if err := agyHook(dir, agyFile, args[1], os.Stdin, os.Stdout); err != nil {
 			fmt.Fprintln(os.Stderr, "AX Antigravity hook:", err)
 		}
 		return nil
@@ -685,7 +696,7 @@ Ask either agent to message another by name.
 		doctor(ctx, dir, os.Stdout)
 		return nil
 	case "agents", "status", "policy", "external", "resolve":
-		if e = ensureBroker(dir); e != nil {
+		if e := ensureBroker(dir); e != nil {
 			return e
 		}
 		c, e := dial(socketPath(dir))

@@ -438,8 +438,10 @@ func TestAgyHookShellKeepsOnlyNativeParentActive(t *testing.T) {
 
 func TestAgyLauncherUsesNativeExecAndManualDelivery(t *testing.T) {
 	if dir := os.Getenv("AX_TEST_AGY_LAUNCH"); dir != "" {
-		os.Setenv("AX_ALLOW_BYPASS", "1")
-		if err := Launch(context.Background(), dir, "agy", []string{"-n", "helper", "--model", "native-model"}); err != nil {
+		if os.Getenv("AX_TEST_AGY_CONSENT") == "1" {
+			os.Setenv("AX_ALLOW_BYPASS", "1")
+		}
+		if err := Launch(context.Background(), dir, "agy", []string{"-n", "helper", "--model", "native-model", "--dangerously-skip-permissions"}); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
@@ -453,13 +455,19 @@ func TestAgyLauncherUsesNativeExecAndManualDelivery(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestAgyLauncherUsesNativeExecAndManualDelivery$")
-	cmd.Env = append(os.Environ(), "AX_TEST_AGY_LAUNCH="+dir, "HOME="+home, "PATH="+bin+":"+os.Getenv("PATH"))
-	if result, err := cmd.CombinedOutput(); err != nil {
+	run := func(consent string) ([]byte, error) {
+		cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestAgyLauncherUsesNativeExecAndManualDelivery$")
+		cmd.Env = append(os.Environ(), "AX_TEST_AGY_LAUNCH="+dir, "AX_TEST_AGY_CONSENT="+consent, "HOME="+home, "PATH="+bin+":"+os.Getenv("PATH"))
+		return cmd.CombinedOutput()
+	}
+	if result, err := run("0"); err == nil || !bytes.Contains(result, []byte("authorize AX delivery once")) {
+		t.Fatalf("native permissions flag enabled AX delivery without explicit consent: %v: %s", err, result)
+	}
+	if result, err := run("1"); err != nil {
 		t.Fatalf("native launcher fixture: %v: %s", err, result)
 	}
 	data, err := os.ReadFile(out)
-	if err != nil || string(data) != "--model\x00native-model\x00" {
+	if err != nil || string(data) != "--model\x00native-model\x00--dangerously-skip-permissions\x00" {
 		t.Fatalf("native args changed: %q, %v", data, err)
 	}
 	s, err := loadSession(filepath.Join(dir, "sessions", "helper.json"))
@@ -539,28 +547,6 @@ func TestAgyResumeBindsOnFirstInvocation(t *testing.T) {
 }
 
 func TestAgyExplicitConsent(t *testing.T) {
-	for _, tc := range []struct {
-		args []string
-		want bool
-	}{
-		{nil, false},
-		{[]string{"--dangerously-skip-permissions"}, true},
-		{[]string{"--dangerously-skip-permissions=true"}, true},
-		{[]string{"--dangerously-skip-permissions=false"}, false},
-		{[]string{"--", "--dangerously-skip-permissions"}, false},
-		{[]string{"--print", "--dangerously-skip-permissions"}, false},
-		{[]string{"-print", "--dangerously-skip-permissions"}, false},
-		{[]string{"-dangerously-skip-permissions"}, true},
-		{[]string{"dangerously-skip-permissions"}, false},
-		{[]string{"---dangerously-skip-permissions"}, false},
-		{[]string{"-p", "-h"}, false},
-		{[]string{"--settings", `{"toolPermission":"always-proceed"}`}, false},
-		{[]string{"--settings", "/unchanged/native/settings.json"}, false},
-	} {
-		if got := agyExplicitBypass(tc.args); got != tc.want {
-			t.Fatalf("bypass %q: %v", tc.args, got)
-		}
-	}
 	p := &peer{Agent: Agent{Host: "agy", Permission: "unverified"}}
 	if safe(p) {
 		t.Fatal("unverified native permissions bypassed AX consent")

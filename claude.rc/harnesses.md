@@ -47,7 +47,7 @@ The [adapter guide](adapters.md) explains the native capabilities, lifecycle con
 
 ## Antigravity CLI
 
-Start with `AX_ALLOW_BYPASS=1 ax agy -n helper` to authorize AX delivery once for this name. Later launches use `ax agy -n helper`. The native bypass flag also opts in. Antigravity does not attest its live approval mode, so AX records it as unverified and requires saved consent. Native permissions remain under Antigravity’s control. Resume a native conversation with `ax agy -n helper -r CONVERSATION_ID`, or repeat the AX name without extra arguments to resume its saved conversation. Other arguments, including model and execution mode, pass through to the native CLI.
+Start with `AX_ALLOW_BYPASS=1 ax agy -n helper` to authorize AX delivery once for this name. Later launches use `ax agy -n helper`. Antigravity does not attest its live approval mode, so AX records it as unverified and requires saved consent. Native flags control Antigravity permissions independently of this opt-in. Resume a native conversation with `ax agy -n helper -r CONVERSATION_ID`, or repeat the AX name without extra arguments to resume its saved conversation. Other arguments, including model and execution mode, pass through to the native CLI.
 
 On first launch AX writes its managed plugin under `~/.gemini/config/plugins/ax`. It preserves other plugins and refuses to replace an unrelated plugin at that path. Ordinary Antigravity sessions get an inactive MCP server with no AX tools. AX identities and credentials remain in AX_HOME rather than global plugin configuration.
 

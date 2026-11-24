@@ -117,9 +117,6 @@ func launch(ctx context.Context, dir, host string, args []string, spawnToken str
 		return e
 	}
 	bypass := false
-	if host == "agy" {
-		bypass = agyExplicitBypass(nativeArgs)
-	}
 	if host == "codex" && !codexHelp(nativeArgs) {
 		nativeArgs, bypass, e = codexBypassArgs(nativeArgs)
 		if e != nil {

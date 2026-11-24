@@ -35,22 +35,6 @@ func agyOptions(args []string) []string {
 	return options
 }
 
-// Antigravity does not provide a live approval-mode attestation. Only an
-// explicit native bypass flag can opt in automatically; all other launches use
-// AX's existing, saved delivery consent without changing native permissions.
-func agyExplicitBypass(args []string) bool {
-	bypass := false
-	for _, arg := range agyOptions(args) {
-		if arg == "dangerously-skip-permissions" {
-			bypass = true
-		}
-		if value, ok := strings.CutPrefix(arg, "dangerously-skip-permissions="); ok {
-			bypass, _ = strconv.ParseBool(value)
-		}
-	}
-	return bypass
-}
-
 func prepareAgy(_ context.Context, dir, file, _ string, s Session, args, env []string, _ chan<- error) ([]string, []string, func(), error) {
 	noop := func() {}
 	for _, arg := range agyOptions(args) {

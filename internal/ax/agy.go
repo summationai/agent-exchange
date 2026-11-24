@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 )
 
 const agyInstructions = "On each new user turn, call the AX check_inbox tool once before other work; read any returned peer task and guidance. Native hooks bind this conversation and report readiness. There is no automatic idle wake; replies need another user turn. Never poll or sleep waiting. " + delegation
@@ -149,19 +150,43 @@ func activeAgySession(file string) (Session, bool) {
 	return s, err == nil && s.Host == "agy" && s.LaunchID != "" && s.LaunchID == os.Getenv("AX_LAUNCH_ID") && os.Getenv("AX_AGY_PID") == strconv.Itoa(os.Getppid())
 }
 
-// If resource protection skips a hook, the previous conversation binding is
-// no longer evidence for the current turn. A later hook can bind it again.
-func suspendAgyBinding(file string) error {
+// Publish revocation before attempting the session lock. Each hook approves
+// only its own generation, so it cannot clear a newer hook's revocation.
+func suspendAgyBinding(file, launch string) (string, error) {
+	generation := launch + "." + randomID("")
+	path := file + ".agy-binding"
+	if err := savePrivateJSON(path, generation); err != nil {
+		// A missing marker also denies access if replacing it fails.
+		_ = os.Remove(path)
+		return "", err
+	}
+	return generation, nil
+}
+
+func agyBindingMatches(file, generation string) bool {
+	if generation == "" {
+		return false
+	}
+	f, err := privateFile(file+".agy-binding", syscall.O_RDONLY|syscall.O_NONBLOCK)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	body, err := io.ReadAll(io.LimitReader(f, 256))
+	return err == nil && bytes.Equal(body, raw(generation))
+}
+
+func confirmAgyBinding(file, launch, native, generation string) error {
 	lock, err := lockSession(file)
 	if err != nil {
 		return err
 	}
 	defer lock.Close()
 	s, active := activeAgySession(file)
-	if !active {
-		return nil
+	if !active || s.LaunchID != launch || !s.Started || s.Native != native || s.BindingError != "" || !agyBindingMatches(file, generation) {
+		return errors.New("Antigravity hook no longer owns the current AX binding")
 	}
-	s.Started = false
+	s.AgyBinding = generation
 	return saveSession(file, s)
 }
 
@@ -215,7 +240,8 @@ func agyHook(dir, file, event string, in io.Reader, out io.Writer) error {
 	}
 	// Revoke the previous turn's evidence before reading potentially malformed
 	// input. A failed or timed-out hook must not leave old mail readable.
-	if err := suspendAgyBinding(file); err != nil {
+	generation, err := suspendAgyBinding(file, s.LaunchID)
+	if err != nil {
 		return err
 	}
 	var input struct {
@@ -245,6 +271,9 @@ func agyHook(dir, file, event string, in io.Reader, out io.Writer) error {
 		if err := report("UserPromptSubmit"); err != nil {
 			return err
 		}
+	}
+	if err := confirmAgyBinding(file, s.LaunchID, input.Native, generation); err != nil {
+		return err
 	}
 	if event == "SessionStart" || event == "PreInvocation" && !s.Started {
 		result["injectSteps"] = []object{{"systemMessage": object{"systemMessage": agyInstructions}}}

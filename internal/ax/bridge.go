@@ -575,6 +575,9 @@ func (b *bridge) bindingLocked(meta json.RawMessage) (object, error) {
 			return nil, fmt.Errorf("%s session is still starting; retry shortly", s.Host)
 		}
 		if s.Host == "agy" {
+			if !agyBindingMatches(b.file, s.AgyBinding) {
+				return nil, errors.New("Antigravity has not confirmed the current AX conversation binding")
+			}
 			if !s.AllowBypass {
 				return nil, errors.New("Antigravity needs saved AX delivery consent; relaunch once with AX_ALLOW_BYPASS=1")
 			}

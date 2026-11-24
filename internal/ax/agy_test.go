@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -273,11 +274,32 @@ func TestAgyHooksBindWithoutServingContentAndUseSharedInbox(t *testing.T) {
 	var inbox struct {
 		Message *Message `json:"message"`
 	}
-	if err := suspendAgyBinding(file); err != nil {
+	if _, err := suspendAgyBinding(file, s.LaunchID); err != nil {
 		t.Fatal(err)
 	}
 	if err := mcp.call(t, "check_inbox", object{}, &inbox); err == "" || inbox.Message != nil {
 		t.Fatal("skipped hook left the previous content binding usable")
+	}
+	hook("PreInvocation", "", false)
+	lock, err := lockSession(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var blockedOutput bytes.Buffer
+	err = agyHook(dir, file, "PreInvocation", bytes.NewReader(raw(object{"conversationId": uuid()})), &blockedOutput)
+	lock.Close()
+	if err == nil || !strings.Contains(err.Error(), "AX session state is busy") {
+		t.Fatal("expected the hook to time out on the session lock", err)
+	}
+	current, err := loadSession(file)
+	if err != nil || !current.Started || current.Native != native {
+		t.Fatal("test did not leave the previous saved binding in place", err)
+	}
+	if err := mcp.call(t, "check_inbox", object{}, &inbox); err == "" || inbox.Message != nil {
+		t.Fatal("lock timeout left the previous mailbox readable")
+	}
+	if err = owner.call("ax.inspect_message", object{"message_id": sent.ID}, &status); err != nil || status.Message.State != "queued" {
+		t.Fatal("failed hook consumed queued mail", status.Message.State, err)
 	}
 	hook("PreInvocation", "", false)
 	for _, input := range []string{"{", "{}", `{"conversationId":false}`} {
@@ -314,7 +336,7 @@ func TestAgyHooksBindWithoutServingContentAndUseSharedInbox(t *testing.T) {
 	if err = sender.call("ax.send", object{"target": s.Name, "text": "HELD_BODY", "client_message_id": "agy-consent-hold"}, nil); err != nil {
 		t.Fatal(err)
 	}
-	current, err := loadSession(file)
+	current, err = loadSession(file)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -192,6 +192,7 @@ func launch(ctx context.Context, dir, host string, args []string, spawnToken str
 	s.Started = false // This launch must receive its own native SessionStart.
 	s.ClaudeStartup = host == "claude" && spawnToken != "" && claudeNeedsStartup(nativeArgs)
 	s.BindingError = ""
+	s.AgyBinding = ""
 	s.DeliveryBoundary = os.Getenv("AX_DELIVERY_BOUNDARY")
 	if host == "agy" {
 		s.DeliveryMode = "manual"
@@ -633,11 +634,14 @@ Ask either agent to message another by name.
 		if len(args) != 2 {
 			return errors.New("usage: ax agy-hook EVENT")
 		}
-		if _, active := activeAgySession(os.Getenv("AX_SESSION_FILE")); !active {
-			return agyHook(dir, os.Getenv("AX_SESSION_FILE"), args[1], os.Stdin, os.Stdout)
+		file := os.Getenv("AX_SESSION_FILE")
+		s, active := activeAgySession(file)
+		if !active {
+			fmt.Fprintln(os.Stdout, "{}")
+			return nil
 		}
 		if err := resourcePause(dir, time.Now()); err != nil {
-			if err := suspendAgyBinding(os.Getenv("AX_SESSION_FILE")); err != nil {
+			if _, err := suspendAgyBinding(file, s.LaunchID); err != nil {
 				fmt.Fprintln(os.Stderr, "AX Antigravity binding:", err)
 			}
 			fmt.Fprintln(os.Stdout, "{}")
@@ -648,7 +652,7 @@ Ask either agent to message another by name.
 				_, _ = reportCPU(dir, time.Now(), cpu)
 			}
 		}()
-		if err := agyHook(dir, os.Getenv("AX_SESSION_FILE"), args[1], os.Stdin, os.Stdout); err != nil {
+		if err := agyHook(dir, file, args[1], os.Stdin, os.Stdout); err != nil {
 			fmt.Fprintln(os.Stderr, "AX Antigravity hook:", err)
 		}
 		return nil

@@ -16,6 +16,21 @@ import (
 
 const agyInstructions = "On each new user turn, call the AX check_inbox tool once before other work; read any returned peer task and guidance. Native hooks bind this conversation and report readiness. There is no automatic idle wake; replies need another user turn. Never poll or sleep waiting. " + delegation
 
+func agyFlagName(arg string) string {
+	return strings.TrimPrefix(strings.TrimPrefix(arg, "-"), "-")
+}
+
+func agyTakesValue(arg string) bool {
+	if !strings.HasPrefix(arg, "-") {
+		return false
+	}
+	switch agyFlagName(arg) {
+	case "agent", "model", "project", "effort", "mode", "print", "p", "prompt", "prompt-interactive", "i", "conversation", "resume", "r", "add-dir", "log-file", "input-format", "output-format", "json-schema", "print-timeout", "settings":
+		return true
+	}
+	return false
+}
+
 // Match the native Go flag parser: one or two dashes, string values consumed
 // even when they look like flags, and no options after a positional argument.
 func agyOptions(args []string) []string {
@@ -25,10 +40,8 @@ func agyOptions(args []string) []string {
 		if arg == "--" || !strings.HasPrefix(arg, "-") || arg == "-" {
 			break
 		}
-		arg = strings.TrimPrefix(strings.TrimPrefix(arg, "-"), "-")
-		options = append(options, arg)
-		switch arg {
-		case "agent", "model", "project", "effort", "mode", "print", "p", "prompt", "prompt-interactive", "i", "conversation", "resume", "r", "add-dir", "log-file", "input-format", "output-format", "json-schema", "print-timeout", "settings":
+		options = append(options, agyFlagName(arg))
+		if agyTakesValue(arg) {
 			i++
 		}
 	}
@@ -256,8 +269,12 @@ func agyHook(dir, file, event string, in io.Reader, out io.Writer) error {
 			return err
 		}
 	}
-	if err := confirmAgyBinding(file, s.LaunchID, input.Native, generation); err != nil {
-		return err
+	// Only a model invocation opens delivery. Startup and Stop report native
+	// state but leave mail queued until the next verified invocation.
+	if event == "PreInvocation" {
+		if err := confirmAgyBinding(file, s.LaunchID, input.Native, generation); err != nil {
+			return err
+		}
 	}
 	if event == "SessionStart" || event == "PreInvocation" && !s.Started {
 		result["injectSteps"] = []object{{"systemMessage": object{"systemMessage": agyInstructions}}}

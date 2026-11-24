@@ -234,6 +234,10 @@ func TestAgyHooksBindWithoutServingContentAndUseSharedInbox(t *testing.T) {
 	mcp := &attachedMCP{conn: host, read: json.NewDecoder(host)}
 	mcp.rpc(t, "initialize", object{"protocolVersion": "2025-11-25"})
 	mcp.rpc(t, "tools/list", object{})
+	if err := mcp.call(t, "list_agents", object{}, nil); err == "" {
+		t.Fatal("startup opened delivery before the first invocation")
+	}
+	hook("PreInvocation", "", false)
 	var agents struct {
 		Agents []Agent `json:"agents"`
 	}
@@ -274,6 +278,10 @@ func TestAgyHooksBindWithoutServingContentAndUseSharedInbox(t *testing.T) {
 	var inbox struct {
 		Message *Message `json:"message"`
 	}
+	if err := mcp.call(t, "check_inbox", object{}, &inbox); err == "" || inbox.Message != nil {
+		t.Fatal("Stop left the previous turn's mailbox readable")
+	}
+	hook("PreInvocation", "", false)
 	if _, err := suspendAgyBinding(file, s.LaunchID); err != nil {
 		t.Fatal(err)
 	}
@@ -441,7 +449,7 @@ func TestAgyLauncherUsesNativeExecAndManualDelivery(t *testing.T) {
 		if os.Getenv("AX_TEST_AGY_CONSENT") == "1" {
 			os.Setenv("AX_ALLOW_BYPASS", "1")
 		}
-		if err := Launch(context.Background(), dir, "agy", []string{"-n", "helper", "--model", "native-model", "--dangerously-skip-permissions"}); err != nil {
+		if err := Launch(context.Background(), dir, "agy", []string{"-n", "helper", "--model", "native-model", "--dangerously-skip-permissions", "-p", "-n=other"}); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
@@ -467,7 +475,7 @@ func TestAgyLauncherUsesNativeExecAndManualDelivery(t *testing.T) {
 		t.Fatalf("native launcher fixture: %v: %s", err, result)
 	}
 	data, err := os.ReadFile(out)
-	if err != nil || string(data) != "--model\x00native-model\x00--dangerously-skip-permissions\x00" {
+	if err != nil || string(data) != "--model\x00native-model\x00--dangerously-skip-permissions\x00-p\x00-n=other\x00" {
 		t.Fatalf("native args changed: %q, %v", data, err)
 	}
 	s, err := loadSession(filepath.Join(dir, "sessions", "helper.json"))

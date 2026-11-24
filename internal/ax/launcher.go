@@ -27,11 +27,11 @@ func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\\'
 // AX owns name and external policy. Preserve other arguments, including native subcommands
 // and the host's end-of-options separator.
 func launchArgs(args []string) (string, []string, error) {
-	name, _, native, err := launchOptions(args)
+	name, _, native, err := launchOptions(args, "")
 	return name, native, err
 }
 
-func launchOptions(args []string) (string, string, []string, error) {
+func launchOptions(args []string, host string) (string, string, []string, error) {
 	external := os.Getenv("AX_EXTERNAL")
 	var name string
 	var native []string
@@ -41,6 +41,11 @@ func launchOptions(args []string) (string, string, []string, error) {
 		if arg == "--" {
 			native = append(native, args[i:]...)
 			break
+		}
+		if host == "agy" && i+1 < len(args) && agyTakesValue(arg) {
+			native = append(native, arg, args[i+1])
+			i++
+			continue
 		}
 		legacy = legacy || arg == "-name" || strings.HasPrefix(arg, "-name=")
 		if arg == "--external" {
@@ -112,7 +117,7 @@ func Launch(ctx context.Context, dir, host string, args []string) error {
 }
 
 func launch(ctx context.Context, dir, host string, args []string, spawnToken string) error {
-	name, external, nativeArgs, e := launchOptions(args)
+	name, external, nativeArgs, e := launchOptions(args, host)
 	if e != nil {
 		return e
 	}

@@ -366,7 +366,7 @@ func TestRelayTerminalNoticesAndNoExtraSessionWakes(t *testing.T) {
 func TestLaunchExternalOptions(t *testing.T) {
 	t.Setenv("AX_EXTERNAL", "")
 	for _, args := range [][]string{{"-n", "api", "--external", "verified", "resume"}, {"-n", "api", "--external=all"}, {"-n", "api"}} {
-		name, policy, native, err := launchOptions(args)
+		name, policy, native, err := launchOptions(args, "")
 		if err != nil || name != "api" {
 			t.Fatal(err)
 		}
@@ -378,12 +378,12 @@ func TestLaunchExternalOptions(t *testing.T) {
 		}
 	}
 	for _, args := range [][]string{{"-n", "api", "--external=bad"}, {"-n", "api", "--external"}} {
-		if _, _, _, err := launchOptions(args); err == nil {
+		if _, _, _, err := launchOptions(args, ""); err == nil {
 			t.Fatal("accepted bad option")
 		}
 	}
 	t.Setenv("AX_EXTERNAL", "verified")
-	_, policy, _, err := launchOptions([]string{"-n", "api"})
+	_, policy, _, err := launchOptions([]string{"-n", "api"}, "")
 	if err != nil || policy != "verified" {
 		t.Fatal("missing environment default")
 	}

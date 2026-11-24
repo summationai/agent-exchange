@@ -76,3 +76,9 @@ Idle snapshots of the two persistent broker/adapter pairs showed 0.0 to 0.4 perc
 Before upgrading the user's normal runtime, a consistent schema-3 mailbox copy migrated to schema 4 with all 951 message payloads and 22 agent credential hashes unchanged. At the later cutover, all 963 original messages and 22 credentials were retained. Two running 0.7.2 Claude-channel bridge fixtures also exchanged messages before and after a broker-only upgrade, retaining their bridge PIDs. This tests bridge compatibility; it does not claim a native Claude model exchange across two hosts.
 
 The full race suite, vet, and build passed on the combined source. Autoreview and the AX peer review were clean. Release-version packaging and the accompanying website are checked separately at the release head. Live cross-machine Linux/WSL, address changes, suspend/resume, and a two-host native Claude-to-Codex exchange remain unverified. Certificates require explicit manual re-pairing for rotation; remote spawning and automatic task-outcome synchronization are not provided by the network adapter.
+
+## Antigravity CLI
+
+November 23, 2026. Adapter validation covers native argument and resume passthrough, private plugin generation, preserving unrelated plugins, inactive MCP behavior outside matching AX launches, hook-supplied conversation binding, lifecycle hooks without content or receipt fabrication, no forced completion loops, and the shared inbox policy gate. The installed Antigravity CLI, with bundled changelog version 1.5.16, also validates the generated plugin using its native plugin validator. Tests cover saved consent and its revocation; the adapter does not infer live approval mode from settings files.
+
+A live model request/reply and interactive terminal recovery have not yet been verified. Configuration validation and broker fixtures do not prove live delivery. Idle sessions require a subsequent user turn; the adapter does not claim idle wake.

@@ -235,6 +235,9 @@ func (b *broker) checkInbox(p *peer) (any, error) {
 }
 
 func sessionInstructions(s Session) string {
+	if s.Host == "agy" {
+		return agyInstructions
+	}
 	if s.DeliveryMode != "manual" {
 		return instructions
 	}

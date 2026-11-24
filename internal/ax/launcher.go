@@ -117,6 +117,9 @@ func launch(ctx context.Context, dir, host string, args []string, spawnToken str
 		return e
 	}
 	bypass := false
+	if host == "agy" {
+		bypass = agyExplicitBypass(nativeArgs)
+	}
 	if host == "codex" && !codexHelp(nativeArgs) {
 		nativeArgs, bypass, e = codexBypassArgs(nativeArgs)
 		if e != nil {
@@ -190,6 +193,9 @@ func launch(ctx context.Context, dir, host string, args []string, spawnToken str
 	s.ClaudeStartup = host == "claude" && spawnToken != "" && claudeNeedsStartup(nativeArgs)
 	s.BindingError = ""
 	s.DeliveryBoundary = os.Getenv("AX_DELIVERY_BOUNDARY")
+	if host == "agy" {
+		s.DeliveryMode = "manual"
+	}
 	if _, e = sessionCapabilities(s); e != nil {
 		return e
 	}
@@ -410,7 +416,7 @@ func Hook(dir, file string, in io.Reader, launch ...string) error {
 	if s.BindingError != "" {
 		return errors.New(s.BindingError)
 	}
-	if input.Event == "SessionStart" && (s.Native == "" || (!s.Started && s.LaunchID != "")) {
+	if input.Event == "SessionStart" && (s.Native == "" || (!s.Started && s.LaunchID != "" && s.Host != "agy")) {
 		if s.Native != input.Session {
 			s.ClaudePending = ""
 			s.NativeFile = ""
@@ -496,6 +502,7 @@ func Main(args []string) error {
   ax grok --name reviewer
   ax opencode --name editor
   ax pi --name worker
+  ax agy --name helper
 
 AX owns the name option, --name or -n. Other arguments go to the native
 harness, which also receives the name when it can display one.
@@ -541,7 +548,7 @@ Ask either agent to message another by name.
 	defer cancel()
 	// Do not export GOMAXPROCS or apply inherited limits to native harnesses.
 	switch args[0] {
-	case "serve", "bridge", "hook", "inbox", "attach", "verify", "network":
+	case "serve", "bridge", "hook", "agy-hook", "agy-bridge", "inbox", "attach", "verify", "network":
 		runtime.GOMAXPROCS(1)
 	}
 	switch args[0] {
@@ -552,7 +559,7 @@ Ask either agent to message another by name.
 		stopResources := watchResources(context.Background(), dir, cancel, func() { os.Exit(75) })
 		defer stopResources()
 		return networkCLI(ctx, dir, args[1:], os.Stdin, os.Stdout)
-	case "attach", "bridge":
+	case "attach", "bridge", "agy-bridge":
 		inputInfo, err := os.Stdin.Stat()
 		if err != nil {
 			return err
@@ -579,6 +586,13 @@ Ask either agent to message another by name.
 		}
 		input := os.NewFile(uintptr(fd), "AX MCP input")
 		defer input.Close()
+		if args[0] == "agy-bridge" {
+			if _, active := activeAgySession(os.Getenv("AX_SESSION_FILE")); !active {
+				go func() { <-ctx.Done(); input.Close() }()
+				return inactiveAgyBridge(input, os.Stdout)
+			}
+			return runBridge(ctx, dir, os.Getenv("AX_SESSION_FILE"), input, os.Stdout, func() { os.Exit(75) })
+		}
 		if args[0] == "bridge" {
 			return runBridge(ctx, dir, os.Getenv("AX_SESSION_FILE"), input, os.Stdout, func() { os.Exit(75) })
 		}
@@ -613,8 +627,31 @@ Ask either agent to message another by name.
 		defer stopResources()
 		go watchDiagnosticLog(ctx, dir, "broker.log")
 		return Serve(ctx, dir)
-	case "claude", "codex", "grok", "opencode", "pi":
+	case "claude", "codex", "grok", "opencode", "pi", "agy":
 		return Launch(ctx, dir, args[0], args[1:])
+	case "agy-hook":
+		if len(args) != 2 {
+			return errors.New("usage: ax agy-hook EVENT")
+		}
+		if _, active := activeAgySession(os.Getenv("AX_SESSION_FILE")); !active {
+			return agyHook(dir, os.Getenv("AX_SESSION_FILE"), args[1], os.Stdin, os.Stdout)
+		}
+		if err := resourcePause(dir, time.Now()); err != nil {
+			if err := suspendAgyBinding(os.Getenv("AX_SESSION_FILE")); err != nil {
+				fmt.Fprintln(os.Stderr, "AX Antigravity binding:", err)
+			}
+			fmt.Fprintln(os.Stdout, "{}")
+			return nil
+		}
+		defer func() {
+			if cpu, err := processCPU(); err == nil {
+				_, _ = reportCPU(dir, time.Now(), cpu)
+			}
+		}()
+		if err := agyHook(dir, os.Getenv("AX_SESSION_FILE"), args[1], os.Stdin, os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "AX Antigravity hook:", err)
+		}
+		return nil
 	case "hook":
 		// A resource pause must not block a native permission or lifecycle hook.
 		if err := resourcePause(dir, time.Now()); err != nil {

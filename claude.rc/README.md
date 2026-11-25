@@ -106,6 +106,8 @@ Saved conversations, identities, and mail remain on disk. Launching the same AX 
 
 Queued, accepted by the host, fetched, and acknowledged are separate delivery states. Acknowledgment proves receipt, not completion of the delegated task.
 
+Discovery counts active unacknowledged mail separately from overdue records. An unresolved handoff stays visible after its deadline because it can still block the queue. Older channel writes and fetches remain visible in mailbox history.
+
 `ax status MESSAGE_ID` includes observed delivery-stage timings. See [readiness and latency measurement](latency.md) for missing-evidence semantics, bounded local samples, and the transport benchmark.
 
 Ask the original sending agent to resend an expired request by its message ID.

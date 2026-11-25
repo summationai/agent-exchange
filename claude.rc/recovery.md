@@ -32,8 +32,11 @@ Most sends, replies, resends or follow-ups that the broker refuses before storin
 ## Recover a missed wake
 
 Ask the agent to call `list_pending` once after a reconnect or when a request
-seems missing. It lists only that agent's unacknowledged incoming mail, ordered by
-recipient sequence. Each page contains at most 50 entries with message ID, sender,
+seems missing. It lists that agent's active unacknowledged mail and unresolved
+handoffs, ordered by recipient sequence. Mail past its delivery deadline drops
+out of this list unless its handoff is still in progress or uncertain. Older
+receipts remain available in mailbox history through `ax inbox` and `ax status`.
+Each page contains at most 50 entries with message ID, sender,
 age, expiry, delivery state, and a preview of up to 100 Unicode characters. When
 `next_after_seq` is present, pass it as `after_seq` to read the next page. These are
 live pages: acknowledgments can remove entries, and new mail has later sequences.
@@ -49,8 +52,8 @@ user requested that work to be executed again. Never poll this tool for replies.
 ## Read a send receipt
 
 Successful `send_message` and `reply` results include `message.receipt` with the
-stable `client_message_id`, recipient readiness, snapshot time, queued count,
-unacknowledged count, and delivery evidence. The message itself includes its
+stable `client_message_id`, recipient readiness, snapshot time, and delivery
+evidence. The message itself includes its
 effective `expires_at_ms`. Readiness is a snapshot, not a guarantee. Offline and
 starting recipients retain queued mail; the receipt says why it is waiting.
 

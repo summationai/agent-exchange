@@ -93,6 +93,57 @@ func TestDiscoveryReportsMailBacklog(t *testing.T) {
 	check(listedAgent(t, request(t, b, from, "ax.list", object{}), "api"), 1, 1, second.ID, "queued")
 }
 
+func TestOverdueMailIsSeparateFromActiveRecovery(t *testing.T) {
+	b, _ := localBroker(t)
+	_, from, _ := endpoint(t, b, "web", testMesh)
+	_, to, _ := endpoint(t, b, "api", testMesh)
+	send := func(key string) Message {
+		return request(t, b, from, "ax.send", object{"target": "api", "text": key, "client_message_id": key}).(Message)
+	}
+	backdate := func(id string) {
+		t.Helper()
+		past := time.Now().Add(-time.Hour).UnixMilli()
+		if _, err := b.db.Exec("UPDATE messages SET expires=?,data=json_set(data,'$.expires_at_ms',?) WHERE id=?", past, past, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	list := func() map[string]any {
+		t.Helper()
+		return listedAgent(t, compactToolResult("ax.list", request(t, b, from, "ax.list", object{}), ""), "api")
+	}
+	old := send("channel-write")
+	if err := b.event(old.ID, "channel_written", to.epoch); err != nil {
+		t.Fatal(err)
+	}
+	backdate(old.ID)
+	if got := list(); got["queued_count"] != float64(0) || got["unacknowledged_count"] != float64(0) || got["overdue_count"] != float64(1) || got["head_message_id"] != nil {
+		t.Fatal("overdue receipt appeared as active mail", got)
+	}
+	if page := request(t, b, to, "ax.pending", object{}).(pendingPage); len(page.Messages) != 0 {
+		t.Fatal("overdue receipt appeared in recovery", page)
+	}
+	if status := request(t, b, from, "ax.status", object{"message_id": old.ID}).(object); status["message"].(Message).State != "channel_written" {
+		t.Fatal("filtering mutated delivery history", status)
+	}
+	uncertain := send("uncertain-handoff")
+	if err := b.event(uncertain.ID, "delivery_uncertain", to.epoch); err != nil {
+		t.Fatal(err)
+	}
+	backdate(uncertain.ID)
+	backdate(send("overdue-wait").ID)
+	fresh := send("new-wait")
+	if r := fresh.Receipt; r.Queued != 1 || r.Pending != 2 || r.Overdue != 2 {
+		t.Fatal("send receipt counted overdue mail as active", r)
+	}
+	if got := list(); got["queued_count"] != float64(1) || got["unacknowledged_count"] != float64(2) || got["overdue_count"] != float64(2) || got["head_message_id"] != uncertain.ID {
+		t.Fatal("discovery lost the overdue FIFO barrier", got)
+	}
+	page := request(t, b, to, "ax.pending", object{}).(pendingPage)
+	if len(page.Messages) != 2 || page.Messages[0].ID != uncertain.ID || page.Messages[1].ID != fresh.ID || page.Messages[1].BlockedBy != uncertain.ID {
+		t.Fatal("recovery lost the overdue FIFO barrier", page)
+	}
+}
+
 func TestDiscoveryReportsLastSeenAndStateChange(t *testing.T) {
 	b, dir := localBroker(t)
 	start := time.Now().UnixMilli()
@@ -595,7 +646,7 @@ func TestUnresolvedMailIndexServesStatusWithoutVersionChange(t *testing.T) {
 	b, dir := localBroker(t)
 	plan := func() string {
 		t.Helper()
-		rows, err := b.db.Query("EXPLAIN QUERY PLAN " + mailStatusQuery)
+		rows, err := b.db.Query("EXPLAIN QUERY PLAN "+mailStatusQuery, time.Now().UnixMilli())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -611,7 +662,7 @@ func TestUnresolvedMailIndexServesStatusWithoutVersionChange(t *testing.T) {
 		}
 		return out
 	}
-	if got := plan(); !strings.Contains(got, "USING COVERING INDEX unresolved_mailbox") {
+	if got := plan(); !strings.Contains(got, "USING COVERING INDEX unresolved_mailbox_deadline") {
 		t.Fatalf("status query does not use the index: %s", got)
 	}
 	var version int
@@ -623,7 +674,8 @@ func TestUnresolvedMailIndexServesStatusWithoutVersionChange(t *testing.T) {
 	_, from, _ := endpoint(t, b, "web", testMesh)
 	endpoint(t, b, "api", testMesh)
 	m := request(t, b, from, "ax.send", object{"target": "api", "text": "one", "client_message_id": "one"}).(Message)
-	if _, err := b.db.Exec("DROP INDEX unresolved_mailbox"); err != nil {
+	if _, err := b.db.Exec(`DROP INDEX unresolved_mailbox_deadline;
+ CREATE INDEX unresolved_mailbox ON messages(recipient,seq,id,state,created) WHERE ` + unresolvedMailSQL); err != nil {
 		t.Fatal(err)
 	}
 	if err := b.db.Close(); err != nil {
@@ -634,7 +686,7 @@ func TestUnresolvedMailIndexServesStatusWithoutVersionChange(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { b.db.Close() })
-	if got := plan(); !strings.Contains(got, "USING COVERING INDEX unresolved_mailbox") {
+	if got := plan(); !strings.Contains(got, "USING COVERING INDEX unresolved_mailbox_deadline") {
 		t.Fatalf("reopened mailbox lacks the index: %s", got)
 	}
 	a := listedAgent(t, request(t, b, &serverConn{}, "ax.inspect", object{}), "api")

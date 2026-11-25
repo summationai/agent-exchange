@@ -80,6 +80,9 @@ func statusColumns(s *AgentStatus, now time.Time) string {
 		out += " seen=" + compactAge(now.Sub(time.UnixMilli(s.LastSeen)))
 	}
 	out += fmt.Sprintf(" queued=%d unacked=%d", s.Queued, s.Pending)
+	if s.Overdue > 0 {
+		out += fmt.Sprintf(" overdue=%d", s.Overdue)
+	}
 	if s.HeadID != "" {
 		out += fmt.Sprintf(" head=%s(%s,%s)", s.HeadID, s.HeadState, compactAge(time.Duration(*s.HeadAge)*time.Second))
 	}
@@ -167,6 +170,9 @@ func compactToolResult(method string, result any, key string) any {
 			}
 			if s := a.AgentStatus; s != nil {
 				entry["queued_count"], entry["unacknowledged_count"] = s.Queued, s.Pending
+				if s.Overdue > 0 {
+					entry["overdue_count"] = s.Overdue
+				}
 				if s.HeadID != "" {
 					entry["head_message_id"], entry["head_state"], entry["head_age_seconds"] = s.HeadID, s.HeadState, s.HeadAge
 				}

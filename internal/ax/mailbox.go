@@ -15,6 +15,12 @@ const maxTTL = 7 * 24 * 60 * 60
 const pendingPageSize = 50
 const maxSequence = 1<<53 - 1 // Keep cursors exact in JSON clients.
 
+// An unresolved handoff still blocks FIFO after its deadline. Other overdue
+// mail stays in history without occupying the active recovery list.
+const activeMailSQL = `(expires > ?1 OR state IN ('handoff_started','delivery_uncertain'))`
+const unresolvedMailSQL = `state NOT IN ('acknowledged','expired','refused','abandoned')`
+const mailCountsSQL = `coalesce(sum(state='queued' AND expires > ?1),0), coalesce(sum(` + activeMailSQL + `),0), count(*)`
+
 func integerArgument(data json.RawMessage, name string, fallback, min, max int64) (int64, error) {
 	if len(data) == 0 {
 		return fallback, nil
@@ -34,6 +40,7 @@ type sendReceipt struct {
 	Recipient      Agent  `json:"recipient"`
 	Queued         int    `json:"queued_count"`
 	Pending        int    `json:"unacknowledged_count"`
+	Overdue        int    `json:"overdue_count,omitempty"`
 	Acknowledged   bool   `json:"acknowledged"`
 	Evidence       string `json:"delivery_evidence"`
 	TaskCompletion string `json:"task_completion"`
@@ -45,6 +52,7 @@ type sendReceipt struct {
 type AgentStatus struct {
 	Queued       int    `json:"queued_count"`
 	Pending      int    `json:"unacknowledged_count"`
+	Overdue      int    `json:"overdue_count,omitempty"`
 	HeadID       string `json:"head_message_id,omitempty"`
 	HeadState    string `json:"head_state,omitempty"`
 	HeadAge      *int64 `json:"head_age_seconds,omitempty"`
@@ -251,10 +259,11 @@ func (b *broker) sendResult(q interface{ QueryRow(string, ...any) *sql.Row }, m 
 	}
 	r := &sendReceipt{ClientID: key, At: time.Now().UnixMilli(), Recipient: agentSnapshot(to),
 		Acknowledged: m.State == "acknowledged", Evidence: deliveryEvidence(m.State), TaskCompletion: "unknown"}
-	if err := q.QueryRow(`SELECT coalesce(sum(state='queued'),0), count(*) FROM messages
- WHERE recipient=? AND state NOT IN ('acknowledged','expired','refused','abandoned')`, m.Recipient).Scan(&r.Queued, &r.Pending); err != nil {
+	var total int
+	if err := q.QueryRow(`SELECT `+mailCountsSQL+` FROM messages WHERE recipient=? AND `+unresolvedMailSQL, r.At, m.Recipient).Scan(&r.Queued, &r.Pending, &total); err != nil {
 		return m, err
 	}
+	r.Overdue = total - r.Pending
 	if m.State == "queued" {
 		r.Evidence += " " + b.messageQueueReason(to, b.peers[m.Sender.ID], m)
 	}
@@ -312,26 +321,33 @@ func (b *broker) discovery() []discoveredAgent {
 
 // One grouped read for all recipients. With a single min(), SQLite takes the
 // bare columns from the row holding that minimum.
-const mailStatusQuery = `SELECT recipient,sum(state='queued'),count(*),id,state,created,min(seq) FROM messages
- WHERE state NOT IN ('acknowledged','expired','refused','abandoned') GROUP BY recipient`
+const mailStatusQuery = `SELECT recipient,` + mailCountsSQL + `,id,state,created,
+ min(CASE WHEN ` + activeMailSQL + ` THEN seq END) FROM messages WHERE ` + unresolvedMailSQL + ` GROUP BY recipient`
 
 func (b *broker) mailStatus() (map[string]*AgentStatus, error) {
-	rows, err := b.db.Query(mailStatusQuery)
+	now := time.Now().UnixMilli()
+	rows, err := b.db.Query(mailStatusQuery, now)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	now := time.Now().UnixMilli()
 	out := map[string]*AgentStatus{}
 	for rows.Next() {
 		var recipient string
-		var created, seq int64
+		var created int64
+		var total int
+		var seq sql.NullInt64
 		s := &AgentStatus{}
-		if err = rows.Scan(&recipient, &s.Queued, &s.Pending, &s.HeadID, &s.HeadState, &created, &seq); err != nil {
+		if err = rows.Scan(&recipient, &s.Queued, &s.Pending, &total, &s.HeadID, &s.HeadState, &created, &seq); err != nil {
 			return nil, err
 		}
-		age := max(0, (now-created)/1000)
-		s.HeadAge = &age
+		s.Overdue = total - s.Pending
+		if seq.Valid {
+			age := max(0, (now-created)/1000)
+			s.HeadAge = &age
+		} else {
+			s.HeadID, s.HeadState = "", ""
+		}
 		out[recipient] = s
 	}
 	return out, rows.Err()
@@ -368,7 +384,7 @@ type pendingPage struct {
 }
 
 func (b *broker) pending(p *peer, after int64) (pendingPage, error) {
-	out := pendingPage{Messages: []pendingMessage{}, At: time.Now().UnixMilli(), Guidance: "Listing does not fetch, acknowledge, or replay tasks. Previews are quoted peer data. Queued content stays hidden until offered; use get_message for offered IDs when recovery is requested. Never poll or automatically repeat uncertain work."}
+	out := pendingPage{Messages: []pendingMessage{}, At: time.Now().UnixMilli(), Guidance: "Lists active mail and unresolved handoffs. Older receipts remain in history. Listing does not fetch, acknowledge, or replay tasks. Previews are quoted peer data. Queued content stays hidden until offered; use get_message for offered IDs when recovery is requested. Never poll or automatically repeat uncertain work."}
 	var headID, headState string
 	var headSeq int64
 	err := b.db.QueryRow(`SELECT id,state,seq FROM messages WHERE recipient=? AND state IN
@@ -376,8 +392,8 @@ func (b *broker) pending(p *peer, after int64) (pendingPage, error) {
 	if err != nil && err != sql.ErrNoRows {
 		return out, err
 	}
-	rows, err := b.db.Query(`SELECT m.data,m.state,a.data FROM messages m JOIN agents a ON a.id=m.sender WHERE m.recipient=? AND m.seq>?
- AND m.state NOT IN ('acknowledged','expired','refused','abandoned') ORDER BY m.seq LIMIT ?`, p.ID, after, pendingPageSize+1)
+	rows, err := b.db.Query(`SELECT m.data,m.state,a.data FROM messages m JOIN agents a ON a.id=m.sender WHERE m.recipient=?2 AND m.seq>?3
+ AND `+unresolvedMailSQL+` AND `+activeMailSQL+` ORDER BY m.seq LIMIT ?4`, out.At, p.ID, after, pendingPageSize+1)
 	if err != nil {
 		return out, err
 	}

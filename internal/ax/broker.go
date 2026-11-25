@@ -161,7 +161,8 @@ func openBroker(dir string) (*broker, error) {
  CREATE INDEX IF NOT EXISTS message_parent ON messages(coalesce(json_extract(data,'$.in_reply_to'),json_extract(data,'$.resend_of')),json_extract(data,'$.thread_id'));
  CREATE INDEX IF NOT EXISTS message_thread ON messages(json_extract(data,'$.thread_id'));
  CREATE INDEX IF NOT EXISTS queued_expiry ON messages(expires) WHERE state='queued';
- CREATE INDEX IF NOT EXISTS unresolved_mailbox ON messages(recipient,seq,id,state,created) WHERE state NOT IN ('acknowledged','expired','refused','abandoned');
+ CREATE INDEX IF NOT EXISTS unresolved_mailbox_deadline ON messages(recipient,seq,id,state,created,expires) WHERE state NOT IN ('acknowledged','expired','refused','abandoned');
+ DROP INDEX IF EXISTS unresolved_mailbox;
  COMMIT;`)
 	if e != nil {
 		return fail(e)

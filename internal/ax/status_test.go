@@ -142,6 +142,31 @@ func TestOverdueMailIsSeparateFromActiveRecovery(t *testing.T) {
 	if len(page.Messages) != 2 || page.Messages[0].ID != uncertain.ID || page.Messages[1].ID != fresh.ID || page.Messages[1].BlockedBy != uncertain.ID {
 		t.Fatal("recovery lost the overdue FIFO barrier", page)
 	}
+	status := request(t, b, from, "ax.status", object{"message_id": fresh.ID}).(object)
+	if snapshot := status["current_snapshot"].(deliverySnapshot); snapshot.BlockedBy != uncertain.ID {
+		t.Fatal("status lost the overdue FIFO barrier", snapshot)
+	}
+}
+
+func TestOverdueQueuedMailIsNotReportedAsFIFOBarrier(t *testing.T) {
+	b, _ := localBroker(t)
+	_, from, _ := endpoint(t, b, "web", testMesh)
+	_, to, _ := endpoint(t, b, "api", testMesh)
+	old := request(t, b, from, "ax.send", object{"target": "api", "text": "old", "client_message_id": "old"}).(Message)
+	past := time.Now().Add(-time.Hour).UnixMilli()
+	if _, err := b.db.Exec("UPDATE messages SET expires=?,data=json_set(data,'$.expires_at_ms',?) WHERE id=?", past, past, old.ID); err != nil {
+		t.Fatal(err)
+	}
+	fresh := request(t, b, from, "ax.send", object{"target": "api", "text": "fresh", "client_message_id": "fresh"}).(Message)
+	page := request(t, b, to, "ax.pending", object{}).(pendingPage)
+	if len(page.Messages) != 1 || page.Messages[0].ID != fresh.ID || page.Messages[0].BlockedBy != "" || strings.Contains(page.Messages[0].Evidence, "blocks this FIFO") {
+		t.Errorf("recovery reported an overdue queued message as a blocker: %+v", page)
+	}
+	status := request(t, b, from, "ax.status", object{"message_id": fresh.ID}).(object)
+	snapshot := status["current_snapshot"].(deliverySnapshot)
+	if snapshot.BlockedBy != "" || strings.Contains(snapshot.Reason, old.ID) {
+		t.Errorf("status reported an overdue queued message as a blocker: %+v", snapshot)
+	}
 }
 
 func TestDiscoveryReportsLastSeenAndStateChange(t *testing.T) {

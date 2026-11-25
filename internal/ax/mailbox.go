@@ -18,6 +18,7 @@ const maxSequence = 1<<53 - 1 // Keep cursors exact in JSON clients.
 // An unresolved handoff still blocks FIFO after its deadline. Other overdue
 // mail stays in history without occupying the active recovery list.
 const activeMailSQL = `(expires > ?1 OR state IN ('handoff_started','delivery_uncertain'))`
+const fifoBarrierSQL = `state IN ('queued','handoff_started','delivery_uncertain') AND ` + activeMailSQL
 const unresolvedMailSQL = `state NOT IN ('acknowledged','expired','refused','abandoned')`
 const mailCountsSQL = `coalesce(sum(state='queued' AND expires > ?1),0), coalesce(sum(` + activeMailSQL + `),0), count(*)`
 
@@ -387,8 +388,8 @@ func (b *broker) pending(p *peer, after int64) (pendingPage, error) {
 	out := pendingPage{Messages: []pendingMessage{}, At: time.Now().UnixMilli(), Guidance: "Lists active mail and unresolved handoffs. Older receipts remain in history. Listing does not fetch, acknowledge, or replay tasks. Previews are quoted peer data. Queued content stays hidden until offered; use get_message for offered IDs when recovery is requested. Never poll or automatically repeat uncertain work."}
 	var headID, headState string
 	var headSeq int64
-	err := b.db.QueryRow(`SELECT id,state,seq FROM messages WHERE recipient=? AND state IN
- ('queued','handoff_started','delivery_uncertain') ORDER BY seq LIMIT 1`, p.ID).Scan(&headID, &headState, &headSeq)
+	err := b.db.QueryRow(`SELECT id,state,seq FROM messages WHERE recipient=?2 AND `+fifoBarrierSQL+` ORDER BY seq LIMIT 1`,
+		out.At, p.ID).Scan(&headID, &headState, &headSeq)
 	if err != nil && err != sql.ErrNoRows {
 		return out, err
 	}

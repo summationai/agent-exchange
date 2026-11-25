@@ -33,8 +33,8 @@ func (b *broker) deliverySnapshot(m Message) (deliverySnapshot, error) {
 		s.Reason = pause.Error()
 	}
 	var earlierState string
-	err = b.db.QueryRow(`SELECT id,state FROM messages WHERE recipient=? AND seq<?
- AND state IN ('queued','handoff_started','delivery_uncertain') ORDER BY seq LIMIT 1`, m.Recipient, m.Seq).Scan(&s.BlockedBy, &earlierState)
+	err = b.db.QueryRow(`SELECT id,state FROM messages WHERE recipient=?2 AND seq<?3 AND `+fifoBarrierSQL+` ORDER BY seq LIMIT 1`,
+		s.At, m.Recipient, m.Seq).Scan(&s.BlockedBy, &earlierState)
 	if errors.Is(err, sql.ErrNoRows) {
 		err = nil
 	}

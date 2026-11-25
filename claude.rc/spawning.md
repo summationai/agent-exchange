@@ -8,9 +8,9 @@ Agents may launch another agent only when you explicitly ask them to. A task ass
 
 ## Terminal selection
 
-AX detects the terminal when your named session starts. Inside tmux, it splits that exact pane on the same tmux server. Otherwise, on macOS, it splits that exact iTerm2 session. Moving focus to another window does not change the target. Missing or stale targeting information produces an error rather than opening an unrelated window.
+AX detects the terminal when your named session starts. Inside tmux, it splits that exact pane on the same tmux server. Otherwise, inside Rex, it splits that exact block on the same Rex server. Otherwise, on macOS, it splits that exact iTerm2 session. Moving focus to another window does not change the target. Missing or stale targeting information produces an error rather than opening an unrelated window.
 
-iTerm2 uses its built-in AppleScript API. macOS may ask you to allow automation access. tmux uses `split-window` and works on macOS, Linux, and WSL. Both create a side-by-side pane. No terminal keystrokes or transcript scraping are used.
+iTerm2 uses its built-in AppleScript API. macOS may ask you to allow automation access. tmux uses `split-window` and works on macOS, Linux, and WSL. Rex uses `rex split` and does not start a Rex server that is no longer running. Each creates a side-by-side pane. No terminal keystrokes or transcript scraping are used.
 
 The terminal starts the new AX session independently of the requesting bridge. Losing that bridge or the broker does not close the new pane. Each harness still has its existing integration limits: Codex and Grok use AX-owned native backends, so this feature does not provide complete crash isolation for those adapters.
 
@@ -51,6 +51,6 @@ Claude may show `server:ax · no MCP server configured with that name` even when
 
 ## Verification
 
-Automated tests use stub harnesses and terminal responses. They cover duplicate and concurrent requests, uncertain outcomes, tree limits, native readiness, argument preservation, permission handling, and session identity. Real iTerm2/tmux pane launches and a Claude-to-Codex round trip still require a user-requested live test. No coding sessions are launched automatically for that verification.
+Automated tests use stub harnesses and terminal responses. They cover duplicate and concurrent requests, uncertain outcomes, tree limits, native readiness, argument preservation, permission handling, and session identity. Real iTerm2, tmux, and Rex pane launches and a Claude-to-Codex round trip still require a user-requested live test. No coding sessions are launched automatically for that verification.
 
-Terminal contracts: [iTerm2 scripting](https://iterm2.com/documentation-scripting.html) and [tmux manual](https://man.openbsd.org/tmux).
+Terminal contracts: [iTerm2 scripting](https://iterm2.com/documentation-scripting.html), [tmux manual](https://man.openbsd.org/tmux), and [Rex CLI](https://www.superlogical.com/rex/docs/automate/cli).

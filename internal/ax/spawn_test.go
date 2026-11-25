@@ -372,6 +372,95 @@ func TestDetectTerminalPrefersTmuxAndDoesNotFallback(t *testing.T) {
 	}
 }
 
+func TestDetectTerminalFindsRexBeforeITermAndDoesNotFallback(t *testing.T) {
+	t.Setenv("TMUX", "")
+	t.Setenv("TERM_PROGRAM", "iTerm.app")
+	t.Setenv("ITERM_SESSION_ID", "w1t1p1:43125C5A-7233-4248-9D01-3266FED7947E")
+	t.Setenv("REX_BLOCK", "block:01a10d99-0c06-7795-bf67-798ce4c36a33")
+	t.Setenv("REX_SERVER", "unix:///Users/me/Library/Application%20Support/rex/server.sock")
+	t.Setenv("REX_BIN_DIR", "/Applications/Rex Beta.app/Contents/Resources/bin")
+	want := terminalContext{Kind: "rex", Pane: "block:01a10d99-0c06-7795-bf67-798ce4c36a33", Socket: "unix:///Users/me/Library/Application%20Support/rex/server.sock", Bin: "/Applications/Rex Beta.app/Contents/Resources/bin/rex"}
+	if got := detectTerminal(); got != want {
+		t.Fatalf("wrong terminal: %+v", got)
+	}
+	for _, incomplete := range [][2]string{{"REX_BLOCK", "editor"}, {"REX_SERVER", ""}, {"REX_BIN_DIR", ""}, {"REX_BIN_DIR", "bin"}} {
+		t.Run(incomplete[0]+"="+incomplete[1], func(t *testing.T) {
+			t.Setenv(incomplete[0], incomplete[1])
+			if got := detectTerminal(); got.Kind != "" {
+				t.Fatalf("fell back from incomplete Rex context: %+v", got)
+			}
+		})
+	}
+	t.Setenv("TMUX", "/tmp/a,b/socket,123,1")
+	t.Setenv("TMUX_PANE", "%12")
+	if got := detectTerminal(); got.Kind != "tmux" {
+		t.Fatalf("tmux inside Rex did not split the tmux pane: %+v", got)
+	}
+}
+
+func TestRexCommandTargetsCapturedBlock(t *testing.T) {
+	dir, parent := spawnFixture(t)
+	output := filepath.Join(parent.Workspace, "terminal-args")
+	created := `{"anchor_id":"block:01a10e00-7268-78c6-8b85-86c56d6a53a9","block_ids":["block:01a10e00-729d-7c38-90f7-d6568611b1c4"],"split_ids":["split:01a10e00-72ab-7157-b9e0-0d4c2a8a1a68"],"revision":2}`
+	lookup := filepath.Join(parent.Workspace, "terminal-context")
+	rex := filepath.Join(testDir(t), "rex")
+	if err := os.WriteFile(rex, []byte("#!/bin/sh\nprintf '%s\\0' \"$@\" > "+shellQuote(output)+"\nprintf '%s %s' \"${REX_BLOCK-unset}\" \"${REX_SESSION-unset}\" > "+shellQuote(lookup)+"\nprintf '%s\\n' "+shellQuote(created)+"\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	terminal := terminalContext{Kind: "rex", Pane: "block:01a10e00-7268-78c6-8b85-86c56d6a53a9", Socket: "unix:///tmp/rex test/server.sock", Bin: rex}
+	t.Setenv("REX_BLOCK", "block:01a10e00-0000-7000-8000-000000000000")
+	t.Setenv("REX_SERVER", "unix:///tmp/other.sock")
+	t.Setenv("REX_SESSION", "session:01a10e00-0000-7000-8000-000000000000")
+	token := strings.Repeat("x", 64)
+	pane, err := openAgentPane(context.Background(), terminal, dir, "worker", token)
+	if err != nil || pane != "block:01a10e00-729d-7c38-90f7-d6568611b1c4" {
+		t.Fatalf("pane: %s %v", pane, err)
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(output)
+	want := []string{"split", "--autostart=false", "-S", "unix:///tmp/rex test/server.sock", "-b", "block:01a10e00-7268-78c6-8b85-86c56d6a53a9", "--split", "right", "--focus=false", "--json", "--", exe, "spawn-run", dir, "worker", token, ""}
+	if got := strings.Split(string(data), "\x00"); !reflect.DeepEqual(got, want) {
+		t.Fatalf("target or command changed: %q", got)
+	}
+	if data, err := os.ReadFile(lookup); err != nil || string(data) != "block:01a10e00-7268-78c6-8b85-86c56d6a53a9 " {
+		t.Fatalf("block lookup context is not the captured block: %q %v", data, err)
+	}
+	for _, reply := range []string{`{"block_ids":[]}`, `{"block_ids":["editor"]}`, `{"block_ids":["block:01a10e00-729d-7c38-90f7-d6568611b1c4","block:01a10e00-72ab-7157-b9e0-0d4c2a8a1a68"]}`, "block:01a10e00-729d-7c38-90f7-d6568611b1c4"} {
+		if err := os.WriteFile(rex, []byte("#!/bin/sh\nprintf '%s\\n' "+shellQuote(reply)+"\n"), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if pane, err := openAgentPane(context.Background(), terminal, dir, "worker", token); err == nil || !strings.Contains(err.Error(), "the launch may have succeeded") {
+			t.Fatalf("accepted %s as %q: %v", reply, pane, err)
+		}
+	}
+}
+
+func TestSpawnCLIRexBudgetIgnoresCLIPath(t *testing.T) {
+	dir, parent := spawnFixture(t)
+	t.Setenv("AX_SESSION_FILE", "")
+	t.Setenv("TMUX", "")
+	t.Setenv("REX_BLOCK", "block:01a10e00-7268-78c6-8b85-86c56d6a53a9")
+	t.Setenv("REX_SERVER", "unix:///tmp/rex.sock")
+	stub := []byte("#!/bin/sh\nprintf '%s\\n' " + shellQuote(`{"block_ids":["block:01a10e00-729d-7c38-90f7-d6568611b1c4"]}`) + "\n")
+	for i := range maxSpawnTree + 1 {
+		bin := testDir(t)
+		if err := os.WriteFile(filepath.Join(bin, "rex"), stub, 0700); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("REX_BIN_DIR", bin)
+		_, err := spawnCLI(context.Background(), dir, []string{"claude", "--name", fmt.Sprintf("cli%d", i), "--cwd", parent.Workspace})
+		if i < maxSpawnTree && err != nil {
+			t.Fatal(err)
+		}
+		if i == maxSpawnTree && (err == nil || !strings.Contains(err.Error(), "eight pane launches")) {
+			t.Fatalf("another path to the Rex CLI got a new tree budget: %v", err)
+		}
+	}
+}
+
 func TestSpawnRunnerExplicitClaudeBypassOptIn(t *testing.T) {
 	for _, tc := range []struct {
 		name  string

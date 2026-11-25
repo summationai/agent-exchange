@@ -354,7 +354,9 @@ func spawnCLI(ctx context.Context, dir string, args []string) (spawnResult, erro
 		return spawnResult{}, errors.New("usage: ax spawn HARNESS --name NAME [--cwd DIRECTORY] [native arguments]")
 	}
 	parent := Session{ID: "cli", Terminal: detectTerminal()}
-	parent.SpawnRoot = "tree_" + digest(string(raw(parent.Terminal)))[:32]
+	pane := parent.Terminal
+	pane.Bin = "" // The budget belongs to the pane, whichever CLI path reaches it.
+	parent.SpawnRoot = "tree_" + digest(string(raw(pane)))[:32]
 	parent.Workspace, _ = os.Getwd()
 	if file := os.Getenv("AX_SESSION_FILE"); file != "" {
 		var err error

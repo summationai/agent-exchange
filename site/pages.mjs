@@ -11,7 +11,7 @@ export const pages = [
   { slug: 'verification', source: 'claude.rc/verification.md', title: 'Tested versions', group: 'Reference', description: 'Recorded live exchanges, platform checks, and the boundaries of that evidence.' },
   { slug: 'pi', source: 'claude.rc/pi.md', title: 'Pi', group: 'Get started', description: 'Connect Pi through its native extension API, with an independent messaging helper.' },
   { slug: 'inbox', source: 'claude.rc/inbox.md', title: 'Separate inbox', group: 'Coordination', description: 'Watch your agents’ messages in a separate terminal.' },
-  { slug: 'spawning', source: 'claude.rc/spawning.md', title: 'Launch a peer', group: 'Coordination', description: 'Open a named peer in tmux or iTerm2 when you request a new agent.' },
+  { slug: 'spawning', source: 'claude.rc/spawning.md', title: 'Launch a peer', group: 'Coordination', description: 'Open a named peer in tmux, Rex, or iTerm2 when you request a new agent.' },
   { slug: 'resource-safety', source: 'claude.rc/resource-safety.md', title: 'Resource protection', group: 'Reference', description: 'CPU accounting, bounded retries, and the limits of AX’s resource controls.' },
 ];
 export const docPath = page => '/docs' + (page.slug ? '/' + page.slug : '');

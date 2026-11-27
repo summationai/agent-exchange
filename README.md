@@ -18,7 +18,7 @@ You can also follow [AGENTS.md](AGENTS.md) yourself or browse the [documentation
 
 Install and sign in to your coding harnesses separately.
 
-AX 0.8.4 separates overdue mailbox receipts from active mail and reports the latest observed delivery stage. See the [release notes](claude.rc/release-notes.md). The installer downloads the latest published release.
+AX 0.9.0 adds Antigravity CLI and message previews with the direction, other agent, a short excerpt, and the local send time. The installer downloads the latest published release. See the [release notes](claude.rc/release-notes.md).
 
 ## Try it
 

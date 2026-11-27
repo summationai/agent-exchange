@@ -34,6 +34,7 @@ type Session struct {
 	ClaudeStartup    bool            `json:"claude_startup_pending,omitempty"`
 	Started          bool            `json:"started"`
 	BindingError     string          `json:"binding_error,omitempty"`
+	AgyBinding       string          `json:"agy_binding,omitempty"`
 	AllowBypass      bool            `json:"allow_bypass"`
 	CodexRemote      string          `json:"codex_remote,omitempty"`
 	AdapterSocket    string          `json:"adapter_socket,omitempty"`

@@ -1,6 +1,6 @@
 # Install Agent Exchange (AX)
 
-Follow this guide when the user asks you to install or update Agent Exchange. AX connects named Claude Code, Codex CLI, Grok Build, OpenCode, and Pi sessions on the same machine. Its command is `ax`. Optional Tailscale pairing connects agents across explicitly paired machines.
+Follow this guide when the user asks you to install or update Agent Exchange. AX connects named Claude Code, Codex CLI, Grok Build, OpenCode, Pi, and Antigravity CLI sessions on the same machine. Its command is `ax`. Optional Tailscale pairing connects agents across explicitly paired machines.
 
 ## Requirements
 
@@ -52,6 +52,8 @@ ax codex --name web resume "session-name"
 
 Launching the same AX name without additional arguments resumes its saved conversation. Existing sessions keep running during an AX update; relaunch them to use the new binary. Saved conversations and AX mailbox state are preserved.
 
+For a new Antigravity CLI name, authorize AX delivery once with `AX_ALLOW_BYPASS=1 ax agy -n helper`; resume with `ax agy -n helper -r CONVERSATION_ID`. Consent is saved for this AX name. Antigravity does not expose a live approval-mode attestation, so AX uses explicit delivery consent while preserving native permissions. Native hooks bind the conversation and report readiness. The agent checks its inbox on user turns; idle sessions wait for another user turn. See [Antigravity setup](https://github.com/summationai/agent-exchange/blob/main/claude.rc/harnesses.md#antigravity-cli).
+
 ## Updating running sessions
 
 Installing a new binary does not replace a running broker or bridge. New features need the new broker as well as relaunched sessions. To finish an update from an earlier release:
@@ -86,6 +88,8 @@ Local-only operation remains the default. Install and connect Tailscale separate
 ## Remove AX
 
 When the user requests uninstallation, remove the installed `ax` binary and any installer-added PATH line that is no longer needed. The default binary is `$HOME/.local/bin/ax`. Preserve `$HOME/.ax`, which contains saved identities and mail, unless the user also asks to delete that state.
+
+If Antigravity integration was used, also remove its managed AX plugin at `~/.gemini/config/plugins/ax` after checking that `ax-managed.json` identifies agent-exchange as its owner. Preserve an unrelated plugin at that path, and reload Antigravity MCP configuration after removal.
 
 ## Further details
 

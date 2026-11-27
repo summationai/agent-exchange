@@ -35,6 +35,7 @@ var harnesses = map[string]harnessAdapter{
 	"grok":     {toolPrefix: "ax__", nativeID: validNative, readyOnDiscovery: true},
 	"opencode": {toolPrefix: "ax_", nativeID: regexp.MustCompile(`^ses_[a-zA-Z0-9]+$`).MatchString, readyOnDiscovery: true},
 	"pi":       {toolPrefix: "ax_", nativeID: validNative, nameFlag: "--name", nativeLaunch: true},
+	"agy":      {toolPrefix: "mcp_ax_ax_", nativeID: validNative, nativeLaunch: true, readyOnDiscovery: true, prepare: prepareAgy},
 	"external": {toolPrefix: "ax.", nativeID: validID.MatchString, readyOnDiscovery: true},
 }
 

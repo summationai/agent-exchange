@@ -79,10 +79,16 @@ func doctor(ctx context.Context, dir string, out io.Writer) {
 			}
 		}
 	}
-	for _, host := range []string{"claude", "codex", "grok", "opencode", "pi"} {
-		b, err := doctorProbe(ctx, host, "--version")
+	for _, host := range []string{"claude", "codex", "grok", "opencode", "pi", "agy"} {
+		option := "--version"
+		if host == "agy" {
+			option = "--help"
+		} // agy does not expose a version flag.
+		b, err := doctorProbe(ctx, host, option)
 		if err != nil {
 			fmt.Fprintf(out, "%s: unavailable (missing, failed, or timed out)\n", host)
+		} else if host == "agy" {
+			fmt.Fprintln(out, "agy: available; AX needs saved delivery consent and a user-turn inbox check")
 		} else {
 			fmt.Fprintf(out, "%s: %q\n", host, strings.TrimSpace(string(b)))
 		}

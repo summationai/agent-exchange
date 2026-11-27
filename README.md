@@ -2,7 +2,7 @@
 
 Give your coding agents names. Let them talk to each other.
 
-Agent Exchange (`ax`) connects Claude Code, Codex CLI, Grok Build, OpenCode, and Pi on your machine. Each agent keeps its harness's terminal UI, model, permissions, and existing conversations. Optional [Tailscale pairing](claude.rc/tailscale.md) connects agents on your other machines.
+Agent Exchange (`ax`) connects Claude Code, Codex CLI, Grok Build, OpenCode, Pi, and Antigravity CLI on your machine. Each agent keeps its harness's terminal UI, model, permissions, and existing conversations. Optional [Tailscale pairing](claude.rc/tailscale.md) connects agents on your other machines.
 
 ## Install
 
@@ -41,6 +41,8 @@ ax opencode --name editor
 ax pi --name worker
 ```
 
+For a new Antigravity CLI name, authorize AX delivery once with `AX_ALLOW_BYPASS=1 ax agy -n helper`. Consent is saved for later launches. It receives queued messages through its inbox tool on a user turn; it does not have automatic idle wake. See [Antigravity setup](claude.rc/harnesses.md#antigravity-cli).
+
 ## Across machines
 
 Pair two AX installations through Tailscale, explicitly grant messaging, and address a remote agent as `reviewer@buildbox`. Each machine keeps its own broker and mailbox. Messages wait on the sender while the other machine is unavailable, subject to expiry.
@@ -64,9 +66,10 @@ Launching the same AX name with no additional arguments resumes its saved conver
 - **Codex CLI:** MCP tools and a private native app server. Requires native queue support.
 - **Grok Build:** MCP tools and a private native leader. Native leader-mode limitations apply.
 - **OpenCode:** MCP tools and a TUI plugin loaded for each launch. Supports the full TUI; pure and mini modes are unsupported.
+- **Antigravity CLI:** Native MCP plugin and lifecycle hooks, with mail checked on user turns. The native terminal survives messaging failures. [Setup and delivery limits](claude.rc/harnesses.md#antigravity-cli).
 - **Pi:** Native extension with automatic connection, idle wake, and busy follow-ups. Pi keeps running if its optional messaging helper fails. See [Pi setup and limits](claude.rc/pi.md).
 
-All five have completed live message exchanges on macOS, including resumed conversations. Automated checks cover release binaries and the broker across platforms. Live harness exchanges on Linux and WSL remain unverified. See [tested versions and evidence](claude.rc/verification.md).
+Claude, Codex, Grok, OpenCode, and Pi have completed live message exchanges on macOS, including resumed conversations. Automated checks cover release binaries and the broker across platforms. Live harness exchanges on Linux and WSL remain unverified. See [tested versions and evidence](claude.rc/verification.md).
 
 ## Add another harness
 

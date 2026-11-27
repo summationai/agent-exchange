@@ -27,11 +27,11 @@ func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\\'
 // AX owns name and external policy. Preserve other arguments, including native subcommands
 // and the host's end-of-options separator.
 func launchArgs(args []string) (string, []string, error) {
-	name, _, native, err := launchOptions(args)
+	name, _, native, err := launchOptions(args, "")
 	return name, native, err
 }
 
-func launchOptions(args []string) (string, string, []string, error) {
+func launchOptions(args []string, host string) (string, string, []string, error) {
 	external := os.Getenv("AX_EXTERNAL")
 	var name string
 	var native []string
@@ -41,6 +41,11 @@ func launchOptions(args []string) (string, string, []string, error) {
 		if arg == "--" {
 			native = append(native, args[i:]...)
 			break
+		}
+		if host == "agy" && i+1 < len(args) && agyTakesValue(arg) {
+			native = append(native, arg, args[i+1])
+			i++
+			continue
 		}
 		legacy = legacy || arg == "-name" || strings.HasPrefix(arg, "-name=")
 		if arg == "--external" {
@@ -112,7 +117,7 @@ func Launch(ctx context.Context, dir, host string, args []string) error {
 }
 
 func launch(ctx context.Context, dir, host string, args []string, spawnToken string) error {
-	name, external, nativeArgs, e := launchOptions(args)
+	name, external, nativeArgs, e := launchOptions(args, host)
 	if e != nil {
 		return e
 	}
@@ -189,7 +194,11 @@ func launch(ctx context.Context, dir, host string, args []string, spawnToken str
 	s.Started = false // This launch must receive its own native SessionStart.
 	s.ClaudeStartup = host == "claude" && spawnToken != "" && claudeNeedsStartup(nativeArgs)
 	s.BindingError = ""
+	s.AgyBinding = ""
 	s.DeliveryBoundary = os.Getenv("AX_DELIVERY_BOUNDARY")
+	if host == "agy" {
+		s.DeliveryMode = "manual"
+	}
 	if _, e = sessionCapabilities(s); e != nil {
 		return e
 	}
@@ -410,7 +419,8 @@ func Hook(dir, file string, in io.Reader, launch ...string) error {
 	if s.BindingError != "" {
 		return errors.New(s.BindingError)
 	}
-	if input.Event == "SessionStart" && (s.Native == "" || (!s.Started && s.LaunchID != "")) {
+	bind := input.Event == "SessionStart" || s.Host == "agy" && input.Event == "AgyBusy"
+	if bind && (s.Native == "" || (!s.Started && s.LaunchID != "" && s.Host != "agy")) {
 		if s.Native != input.Session {
 			s.ClaudePending = ""
 			s.NativeFile = ""
@@ -421,7 +431,7 @@ func Hook(dir, file string, in io.Reader, launch ...string) error {
 		}
 	}
 	if input.Session != s.Native {
-		if input.Event == "SessionStart" {
+		if bind {
 			conflict := bindingConflict(s, input.Session)
 			s.Started, s.BindingError = false, conflict.Error()
 			if e = saveSession(file, s); e != nil {
@@ -442,13 +452,13 @@ func Hook(dir, file string, in io.Reader, launch ...string) error {
 	if persisted {
 		s.ClaudePending = ""
 	}
-	if input.Event == "SessionStart" {
+	if bind {
 		if s.Host == "pi" && input.File != "" && filepath.IsAbs(input.File) {
 			s.NativeFile = input.File
 		}
 		s.Started = true
 	}
-	if input.Event == "SessionStart" || persisted {
+	if bind || persisted {
 		if e = saveSession(file, s); e != nil {
 			return e
 		}
@@ -496,6 +506,7 @@ func Main(args []string) error {
   ax grok --name reviewer
   ax opencode --name editor
   ax pi --name worker
+  ax agy --name helper
 
 AX owns the name option, --name or -n. Other arguments go to the native
 harness, which also receives the name when it can display one.
@@ -533,15 +544,32 @@ Ask either agent to message another by name.
 		defer cancel()
 		return runSpawn(ctx, args[1], args[2], args[3])
 	}
-	dir, e := dataDir()
-	if e != nil {
-		return e
+	var agy Session
+	var agyFile string
+	inactiveAgy := false
+	if args[0] == "agy-hook" || args[0] == "agy-bridge" {
+		agyFile = os.Getenv("AX_SESSION_FILE")
+		var active bool
+		agy, active = activeAgySession(agyFile)
+		inactiveAgy = !active
+		if args[0] == "agy-hook" && inactiveAgy {
+			fmt.Fprintln(os.Stdout, "{}")
+			return nil
+		}
+	}
+	var dir string
+	if !inactiveAgy {
+		var err error
+		dir, err = dataDir()
+		if err != nil {
+			return err
+		}
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM)
 	defer cancel()
 	// Do not export GOMAXPROCS or apply inherited limits to native harnesses.
 	switch args[0] {
-	case "serve", "bridge", "hook", "inbox", "attach", "verify", "network":
+	case "serve", "bridge", "hook", "agy-hook", "agy-bridge", "inbox", "attach", "verify", "network":
 		runtime.GOMAXPROCS(1)
 	}
 	switch args[0] {
@@ -552,7 +580,7 @@ Ask either agent to message another by name.
 		stopResources := watchResources(context.Background(), dir, cancel, func() { os.Exit(75) })
 		defer stopResources()
 		return networkCLI(ctx, dir, args[1:], os.Stdin, os.Stdout)
-	case "attach", "bridge":
+	case "attach", "bridge", "agy-bridge":
 		inputInfo, err := os.Stdin.Stat()
 		if err != nil {
 			return err
@@ -579,6 +607,13 @@ Ask either agent to message another by name.
 		}
 		input := os.NewFile(uintptr(fd), "AX MCP input")
 		defer input.Close()
+		if args[0] == "agy-bridge" {
+			if inactiveAgy {
+				go func() { <-ctx.Done(); input.Close() }()
+				return inactiveAgyBridge(input, os.Stdout)
+			}
+			return runBridge(ctx, dir, agyFile, input, os.Stdout, func() { os.Exit(75) })
+		}
 		if args[0] == "bridge" {
 			return runBridge(ctx, dir, os.Getenv("AX_SESSION_FILE"), input, os.Stdout, func() { os.Exit(75) })
 		}
@@ -613,8 +648,28 @@ Ask either agent to message another by name.
 		defer stopResources()
 		go watchDiagnosticLog(ctx, dir, "broker.log")
 		return Serve(ctx, dir)
-	case "claude", "codex", "grok", "opencode", "pi":
+	case "claude", "codex", "grok", "opencode", "pi", "agy":
 		return Launch(ctx, dir, args[0], args[1:])
+	case "agy-hook":
+		if len(args) != 2 {
+			return errors.New("usage: ax agy-hook EVENT")
+		}
+		if err := resourcePause(dir, time.Now()); err != nil {
+			if _, err := suspendAgyBinding(agyFile, agy.LaunchID); err != nil {
+				fmt.Fprintln(os.Stderr, "AX Antigravity binding:", err)
+			}
+			fmt.Fprintln(os.Stdout, "{}")
+			return nil
+		}
+		defer func() {
+			if cpu, err := processCPU(); err == nil {
+				_, _ = reportCPU(dir, time.Now(), cpu)
+			}
+		}()
+		if err := agyHook(dir, agyFile, args[1], os.Stdin, os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "AX Antigravity hook:", err)
+		}
+		return nil
 	case "hook":
 		// A resource pause must not block a native permission or lifecycle hook.
 		if err := resourcePause(dir, time.Now()); err != nil {
@@ -641,7 +696,7 @@ Ask either agent to message another by name.
 		doctor(ctx, dir, os.Stdout)
 		return nil
 	case "agents", "status", "policy", "external", "resolve":
-		if e = ensureBroker(dir); e != nil {
+		if e := ensureBroker(dir); e != nil {
 			return e
 		}
 		c, e := dial(socketPath(dir))

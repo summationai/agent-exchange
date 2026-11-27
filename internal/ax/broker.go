@@ -471,7 +471,7 @@ func (b *broker) request(c *serverConn, method string, params json.RawMessage) (
 		if (s.Kind != "" && (s.Kind != "relay" || s.Host != "external")) || !validExternal(s.External) {
 			return nil, errors.New("invalid endpoint kind or external policy")
 		}
-		if s.Host == "external" && (s.DeliveryMode != "manual" && s.DeliveryMode != "adapter" && s.DeliveryMode != "mcp") || s.Host != "external" && s.DeliveryMode != "" {
+		if s.Host == "external" && (s.DeliveryMode != "manual" && s.DeliveryMode != "adapter" && s.DeliveryMode != "mcp") || s.Host == "agy" && s.DeliveryMode != "manual" || s.Host != "external" && s.Host != "agy" && s.DeliveryMode != "" {
 			return nil, errors.New("invalid delivery mode")
 		}
 		p := b.peers[s.ID]

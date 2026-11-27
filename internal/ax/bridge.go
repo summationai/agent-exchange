@@ -404,7 +404,7 @@ func (b *bridge) bootstrap() {
 			b.mu.Unlock()
 			return
 		}
-		if s.Host == "claude" || s.Host == "codex" || s.Host == "external" {
+		if s.Host == "claude" || s.Host == "codex" || s.Host == "external" || s.Host == "agy" {
 			return
 		}
 	}
@@ -573,6 +573,15 @@ func (b *bridge) bindingLocked(meta json.RawMessage) (object, error) {
 	if s.Host != "codex" {
 		if !s.Started || !nativeID(s.Host, s.Native) {
 			return nil, fmt.Errorf("%s session is still starting; retry shortly", s.Host)
+		}
+		if s.Host == "agy" {
+			if !agyBindingMatches(b.file, s.AgyBinding) {
+				return nil, errors.New("Antigravity has not confirmed the current AX conversation binding")
+			}
+			if !s.AllowBypass {
+				return nil, errors.New("Antigravity needs saved AX delivery consent; relaunch once with AX_ALLOW_BYPASS=1")
+			}
+			return object{"native_session_id": s.Native, "permission_mode": "unverified", "state": "busy"}, nil
 		}
 		return nil, nil
 	}

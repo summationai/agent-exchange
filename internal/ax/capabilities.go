@@ -29,6 +29,9 @@ func sessionCapabilities(s Session) (*deliveryCapabilities, error) {
 		c.Content, c.Boundary = "peer_channel", "turn_end"
 		c.Boundaries = []string{"turn_end", "idle"}
 		c.Lifecycle = append(c.Lifecycle, "busy", "idle")
+	case "agy":
+		c.Boundary, c.Boundaries = "user_turn", []string{"user_turn"}
+		c.Lifecycle = append(c.Lifecycle, "busy", "idle")
 	case "opencode":
 		// promptAsync is not a peer channel or a reliable busy-session queue.
 		c.Boundary, c.Boundaries = "idle", []string{"idle"}

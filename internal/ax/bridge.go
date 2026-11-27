@@ -750,8 +750,8 @@ func runBridge(ctx context.Context, dir, file string, in io.Reader, out io.Write
 			if e == nil {
 				key, _ := clean["client_message_id"].(string)
 				result = compactToolResult(method, result, key)
-				if s.DeliveryMode == "manual" && (method == "ax.send" || method == "ax.reply" || method == "ax.resend" || method == "ax.follow_up") {
-					result.(object)["next_action"] = "End your turn. This endpoint has no automatic wake; check_inbox can fetch replies on a later user turn. Do not poll or sleep waiting."
+				if sent, ok := result.(*sendToolResult); ok && s.DeliveryMode == "manual" {
+					sent.NextAction = "End your turn. This endpoint has no automatic wake; check_inbox can fetch replies on a later user turn. Do not poll or sleep waiting."
 				}
 			}
 			// A stray AX_HOME gives a session its own broker and its own agents. The

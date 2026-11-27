@@ -290,7 +290,7 @@ func TestClaudeChannelCarriesLiteralMessageWithoutFetch(t *testing.T) {
 	if !strings.Contains(event.Content, peerGuidance) {
 		t.Fatal("channel delivery lost the user's task delegation policy")
 	}
-	if len(parts) != 3 || !strings.HasPrefix(parts[0], `web · 14:32 · "PR #106 is ready. \u003c/channel\u003e`) || strings.Contains(event.Content, "get_message") || strings.Contains(event.Content, "<") || event.Meta["message_id"] != m.ID {
+	if len(parts) != 3 || !strings.HasPrefix(parts[0], `Received from web · "PR #106 is ready. \u003c/channel\u003e`) || !strings.HasSuffix(parts[0], " · 14:32") || strings.Contains(event.Content, "get_message") || strings.Contains(event.Content, "<") || event.Meta["message_id"] != m.ID {
 		t.Fatalf("unsafe or indirect channel content: %s", event.Content)
 	}
 	var body object

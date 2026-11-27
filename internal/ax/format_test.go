@@ -11,21 +11,54 @@ import (
 	"time"
 )
 
+func TestMessageExcerptIsShortAndSingleLine(t *testing.T) {
+	for _, tc := range []struct{ input, want string }{
+		{" \tPR ready\n\u202e\x1bReview next", "PR ready Review next"},
+		{strings.Repeat("界", 73), strings.Repeat("界", 72) + "…"},
+		{strings.Repeat("a", 72) + "\n", strings.Repeat("a", 72)},
+		{"\n\x1b", "(no text preview)"},
+	} {
+		if got := messageExcerpt(tc.input, 72); got != tc.want {
+			t.Errorf("messageExcerpt(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+	}
+}
+
+func TestMessagePreviewsFitAfterEscaping(t *testing.T) {
+	m := Message{ID: "msg_request", Sender: Agent{Name: "web"}, Text: strings.Repeat(`<>&"\`, 16),
+		Created: time.Date(2026, 11, 26, 14, 32, 0, 0, time.Local).UnixMilli(),
+		Receipt: &sendReceipt{Recipient: Agent{Name: "api"}}}
+	header, _, _ := strings.Cut(channelMessage("claude", m), "\n")
+	if !strings.HasPrefix(header, `Received from web · "\u003c\u003e\u0026`) ||
+		!strings.HasSuffix(header, `…" · 14:32`) || len([]rune(header)) > 72 {
+		t.Fatalf("header exceeds the preview budget or lost its timestamp: %q", header)
+	}
+	summary, _, _ := strings.Cut(string(raw(compactToolResult("ax.send", m, "key"))), `,"message":`)
+	if !strings.HasPrefix(summary, `{"summary":"Sent to api · \u003c\u003e\u0026`) ||
+		!strings.HasSuffix(summary, `… · 14:32"`) || len([]rune(summary)) > 72 {
+		t.Fatalf("serialized summary exceeds the preview budget or lost its timestamp: %q", summary)
+	}
+}
+
 func TestCompactResultsPreserveIdentityAndBlockingEvidence(t *testing.T) {
 	m := Message{ID: "msg_request", Thread: "msg_root", Parent: "msg_parent", ResendOf: "msg_expired", Text: strings.Repeat("code context ", 500),
 		Sender:    Agent{ID: "agt_web", Name: "web", Host: "codex", Native: "private-native-id", Mesh: testMesh},
-		Recipient: "agt_api", State: "queued", Expires: 2000,
+		Recipient: "agt_api", State: "queued", Created: time.Date(2026, 11, 26, 14, 32, 0, 0, time.Local).UnixMilli(), Expires: 2000,
 		Receipt: &sendReceipt{ClientID: "retry-key", At: 1000, Recipient: Agent{Name: "api", State: "permission-blocked"}, Evidence: "permission-blocked: relaunch with AX_ALLOW_BYPASS=1", TaskCompletion: "unknown"}}
 	for _, method := range []string{"ax.send", "ax.reply", "ax.follow_up", "ax.resend"} {
-		result := compactToolResult(method, m, "retry-key").(object)
+		result := compactToolResult(method, m, "retry-key")
 		body := string(raw(result))
+		var sent sendToolResult
+		if err := json.Unmarshal([]byte(body), &sent); err != nil || !strings.HasPrefix(body, `{"summary":"Sent to api · code context`) || !strings.HasSuffix(sent.Summary, " · 14:32") || len([]rune(sent.Summary)) > 72 || sent.Message["status"] != "queued" {
+			t.Fatalf("%s lost the directional preview or delivery state: %s, %v", method, body, err)
+		}
 		for _, want := range []string{m.ID, m.Thread, m.Parent, m.ResendOf, "retry-key", "submitted", m.Receipt.Evidence, "unknown"} {
 			if !strings.Contains(body, want) {
 				t.Fatalf("%s lost %q", method, want)
 			}
 		}
-		if strings.Contains(body, "code context") || strings.Contains(body, m.Sender.Native) {
-			t.Fatal("routine send echoed body or private native metadata")
+		if strings.Contains(body, m.Text) || strings.Contains(body, m.Sender.Native) {
+			t.Fatal("routine send echoed the full body or private native metadata")
 		}
 		if len(raw(result)) >= len(raw(m))/2 {
 			t.Fatal("send result did not shrink")

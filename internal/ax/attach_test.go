@@ -138,7 +138,8 @@ func TestAttachedManualRuntimeAndNativePeerRoundTrip(t *testing.T) {
 	if err := m.call(t, "reply", object{"message_id": sent.ID, "text": "reviewed"}, &replied); err != "" {
 		t.Fatal(err)
 	}
-	if !strings.Contains(replied["next_action"].(string), "no automatic wake") || replied["submission"] != "submitted" || strings.Contains(string(raw(replied)), "reviewed") {
+	if !strings.Contains(replied["next_action"].(string), "no automatic wake") || replied["submission"] != "submitted" ||
+		!strings.HasPrefix(replied["summary"].(string), "Sent to native · reviewed · ") {
 		t.Fatalf("misleading manual send receipt: %+v", replied)
 	}
 	select {

@@ -260,9 +260,16 @@ func TestMCPForwardsTypedExpiryAndPendingArguments(t *testing.T) {
 			t.Fatalf("bad MCP response: %s %v", frame.Result, err)
 		}
 		if i == 0 {
-			var result struct{ Message Message }
+			var result struct {
+				Summary string
+				Message Message
+			}
 			if err := json.Unmarshal([]byte(response.Content[0].Text), &result); err != nil || result.Message.Expires-result.Message.Created != 172800000 || result.Message.Receipt == nil || result.Message.Receipt.ClientID != "mcp_send" {
 				t.Fatalf("MCP stripped expiry or receipt: %+v %v", result, err)
+			}
+			if want := "Sent to api · two days · " + time.UnixMilli(result.Message.Created).Local().Format("15:04"); result.Summary != want ||
+				!strings.HasPrefix(response.Content[0].Text, `{"summary":`) || result.Message.State != "queued" {
+				t.Fatalf("MCP lost the sent preview or queued state: %+v", result)
 			}
 		}
 		if i == 4 {

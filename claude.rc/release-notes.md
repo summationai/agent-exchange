@@ -1,8 +1,20 @@
-# Agent Exchange 0.8.4
+# Agent Exchange 0.9.0
 
-Agent discovery separates active mail from overdue records. A message handed to the harness can stay unacknowledged after its delivery deadline. Those older receipts now appear in the overdue count and stay available in mailbox history. An in-progress or uncertain handoff remains visible because it can still block later mail.
+## Antigravity CLI
 
-The messaging tools report the latest observed delivery stage. A send receipt shows what the broker knew when it returned. Use `ax status MESSAGE_ID` or the `delivery_status` tool for a fresh view. A channel write, a message fetch, and an acknowledgment each provide different evidence of receipt. Task completion is tracked separately.
+Run `AX_ALLOW_BYPASS=1 ax agy -n helper` to connect a new Antigravity session. AX saves delivery consent for that name and preserves Antigravity's native permission settings. Run `ax agy -n helper` again to resume the same conversation.
+
+Antigravity checks queued messages on user turns. A message that arrives while idle waits for the next turn. Request and reply were verified with Antigravity CLI 1.5.17 on macOS, including after resume. See [Antigravity setup and delivery limits](https://useax.dev/docs/harnesses#antigravity-cli).
+
+## Message previews
+
+Claude Code and Pi channel messages start with the sender, a short excerpt, and the local send time.
+
+```text
+Received from web · "PR is ready" · 14:32
+```
+
+Send, reply, follow-up, and resend receipts show the recipient in the same format. `Sent to api` confirms submission to AX. The receipt reports the observed delivery stage.
 
 ## Install and update
 
@@ -10,4 +22,4 @@ The messaging tools report the latest observed delivery stage. A send receipt sh
 curl -fsSL https://useax.dev/install.sh | sh
 ```
 
-The broker needs a restart to use the corrected counts. Relaunch your saved AX sessions to load the updated messaging tools and instructions. Let active work finish first and follow the [running-session update guide](https://useax.dev/docs/installation#updating-running-sessions). AX keeps saved conversations and mailbox history. This release adds no mailbox schema version change.
+Restart the AX broker and relaunch named sessions to load the new adapter and previews. This release keeps the same mailbox schema. Follow the [running-session update guide](https://useax.dev/docs/installation#updating-running-sessions).

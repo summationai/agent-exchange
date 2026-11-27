@@ -11,6 +11,19 @@ import (
 	"time"
 )
 
+func TestChannelExcerptIsShortAndSingleLine(t *testing.T) {
+	for _, tc := range []struct{ input, want string }{
+		{" \tPR ready\n\u202e\x1bReview next", "PR ready Review next"},
+		{strings.Repeat("界", 73), strings.Repeat("界", 72) + "…"},
+		{strings.Repeat("a", 72) + "\n", strings.Repeat("a", 72)},
+		{"\n\x1b", "(no text preview)"},
+	} {
+		if got := channelExcerpt(tc.input); got != tc.want {
+			t.Errorf("channelExcerpt(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+	}
+}
+
 func TestCompactResultsPreserveIdentityAndBlockingEvidence(t *testing.T) {
 	m := Message{ID: "msg_request", Thread: "msg_root", Parent: "msg_parent", ResendOf: "msg_expired", Text: strings.Repeat("code context ", 500),
 		Sender:    Agent{ID: "agt_web", Name: "web", Host: "codex", Native: "private-native-id", Mesh: testMesh},

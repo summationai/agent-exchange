@@ -10,7 +10,33 @@ Install AX 0.8.0 or later and sign in to your coding harness on each machine. Bo
 
 The network adapter binds only to a Tailscale address. Allow the paired machines to reach the selected TCP port through your tailnet's access policy. The default port is 48889. Tailnet membership alone does not grant AX access: pairing pins a certificate for one AX installation belonging to one OS user.
 
-## 1. Create public pairing cards
+## Pair with an invitation
+
+Use builds that include `ax network invite` on both machines. If you already run an older `ax network serve` process, restart that adapter with the new build before creating an invitation.
+
+On the laptop, create an invitation that shares the local agent `api`.
+
+```sh
+ax network invite laptop api
+```
+
+On the build machine, choose its name and share its local agent `reviewer`.
+
+```sh
+ax network join buildbox reviewer
+```
+
+Paste the invitation at the prompt. Share it privately with the joining machine. It expires after ten minutes and can pair one installation. If the response is interrupted, retry with the same machine name, agent list, and invitation. Creating another invitation replaces the previous one.
+
+The agent names after the machine name are the local agents this command lets the other machine discover and message. You can list multiple names. Omit the agent names to share none, or explicitly use a quoted `'*'` to share all local agents. An installation that already has a machine name keeps it.
+
+Both commands ensure the adapter is running and enable it to start again with the broker. A new adapter runs in the background. AX reuses an adapter that is already running in a terminal. To move that adapter into the background, stop the foreground command and run `ax network start`.
+
+If Tailscale was unavailable at broker startup, run `ax network start` after reconnecting. After discovery refreshes, `ax agents` shows the permitted agents, such as `reviewer@buildbox`. If connection fails, verify the machines can reach each other's configured Tailscale ports.
+
+## Pair manually
+
+### 1. Create public pairing cards
 
 On the laptop:
 
@@ -28,7 +54,7 @@ These files are public cards, not private keys. Exchange them through a channel 
 
 Initialization is idempotent. `ax network identity` prints an existing public card. For another port, pass it after the machine name, for example `ax network init buildbox 48890`.
 
-## 2. Choose which local agents the peer can reach
+### 2. Choose which local agents the peer can reach
 
 This example uses a local agent named `api` on the laptop and `reviewer` on the build machine.
 
@@ -58,7 +84,7 @@ ax network messaging laptop on
 
 A messaging grant permits scoped delegation to those exported agents. It preserves each receiving harness's sandbox and approval controls. Relayed external content retains its provenance and the recipient's external-content policy.
 
-## 3. Run the adapters and agents
+### 3. Run the adapters and agents
 
 Keep this command running on each machine, in a separate terminal or under your process supervisor:
 
@@ -66,7 +92,7 @@ Keep this command running on each machine, in a separate terminal or under your 
 ax network serve
 ```
 
-There is no automatic network-service installation. Start the adapter again after reboot or arrange that through your operating system's process supervisor. Stopping it leaves native coding sessions and local AX messaging running.
+Manual pairing can use a foreground adapter or `ax network start` for background startup. Stopping the adapter leaves native coding sessions and local AX messaging running.
 
 Launch your agents in their own terminals:
 

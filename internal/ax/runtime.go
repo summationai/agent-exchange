@@ -303,31 +303,34 @@ func listenLocal(dir string) (net.Listener, *os.File, error) {
 	if e != nil {
 		return nil, nil, e
 	}
-	path := socketPath(dir)
-	if info, e := os.Lstat(path); e == nil {
-		if info.Mode()&os.ModeSocket == 0 || info.Sys().(*syscall.Stat_t).Uid != uint32(os.Getuid()) {
-			lock.Close()
-			return nil, nil, errors.New("unsafe existing socket")
-		}
-		if e = os.Remove(path); e != nil {
-			lock.Close()
-			return nil, nil, e
-		}
-	} else if !os.IsNotExist(e) {
-		lock.Close()
-		return nil, nil, e
-	}
-	l, e := net.Listen("unix", path)
+	l, e := listenPrivateSocket(socketPath(dir))
 	if e != nil {
 		lock.Close()
 		return nil, nil, e
 	}
+	return l, lock, nil
+}
+
+func listenPrivateSocket(path string) (net.Listener, error) {
+	if info, e := os.Lstat(path); e == nil {
+		if info.Mode()&os.ModeSocket == 0 || info.Sys().(*syscall.Stat_t).Uid != uint32(os.Getuid()) {
+			return nil, errors.New("unsafe existing socket")
+		}
+		if e = os.Remove(path); e != nil {
+			return nil, e
+		}
+	} else if !os.IsNotExist(e) {
+		return nil, e
+	}
+	l, e := net.Listen("unix", path)
+	if e != nil {
+		return nil, e
+	}
 	if e = os.Chmod(path, 0600); e != nil {
 		l.Close()
-		lock.Close()
-		return nil, nil, e
+		return nil, e
 	}
-	return l, lock, nil
+	return l, nil
 }
 
 // Reuse pre-0.3 identities regardless of launch directory. New names have one

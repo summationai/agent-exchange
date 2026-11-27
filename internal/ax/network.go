@@ -209,13 +209,8 @@ func networkPeers(dir string) (map[string]networkPeer, error) {
 }
 
 func trustNetworkPeer(dir, alias string, card networkCard, exports []string) error {
-	if !validOrigin.MatchString(alias) || len(exports) > 64 {
-		return errors.New("invalid peer alias or too many exported names")
-	}
-	for _, name := range exports {
-		if name != "*" && !validName.MatchString(name) {
-			return errors.New("invalid exported agent name")
-		}
+	if err := validateNetworkExports(alias, exports); err != nil {
+		return err
 	}
 	if _, err := validateNetworkCard(card); err != nil {
 		return err
@@ -229,8 +224,29 @@ func trustNetworkPeer(dir, alias string, card networkCard, exports []string) err
 	if err != nil {
 		return err
 	}
+	if err := prepareNetworkPeer(peers, alias, networkPeer{Card: card, Exports: exports, Messaging: peers[alias].Messaging}); err != nil {
+		return err
+	}
+	return savePrivateJSON(filepath.Join(dir, "network", "peers.json"), peers)
+}
+
+func validateNetworkExports(alias string, exports []string) error {
+	if !validOrigin.MatchString(alias) || len(exports) > 64 {
+		return errors.New("invalid machine name or too many exported agents")
+	}
+	for _, name := range exports {
+		if name != "*" && !validName.MatchString(name) {
+			return errors.New("invalid exported agent name")
+		}
+	}
+	return nil
+}
+
+// Stage a peer in memory so conflicts and size limits can be checked before
+// accepting an invitation or making a remote request.
+func prepareNetworkPeer(peers map[string]networkPeer, alias string, paired networkPeer) error {
 	for name, peer := range peers {
-		same := bytes.Equal(peer.Card.Certificate, card.Certificate)
+		same := bytes.Equal(peer.Card.Certificate, paired.Card.Certificate)
 		if name == alias && !same || name != alias && same {
 			return errors.New("peer alias or certificate is already paired; revoke it explicitly before replacing it")
 		}
@@ -238,11 +254,11 @@ func trustNetworkPeer(dir, alias string, card networkCard, exports []string) err
 	if _, exists := peers[alias]; !exists && len(peers) >= 32 {
 		return errors.New("AX network peer limit reached")
 	}
-	peers[alias] = networkPeer{Card: card, Exports: exports, Messaging: peers[alias].Messaging}
+	peers[alias] = paired
 	if len(raw(peers)) > networkConfigLimit {
 		return errors.New("AX network configuration exceeds its size limit")
 	}
-	return savePrivateJSON(filepath.Join(dir, "network", "peers.json"), peers)
+	return nil
 }
 
 func revokeNetworkPeer(dir, alias string) error {
@@ -255,8 +271,12 @@ func revokeNetworkPeer(dir, alias string) error {
 	if err != nil {
 		return err
 	}
-	if _, exists := peers[alias]; !exists {
+	peer, exists := peers[alias]
+	if !exists {
 		return errors.New("AX network peer is not paired")
+	}
+	if err := invalidateNetworkInvite(dir, networkFingerprint(peer.Card)); err != nil {
+		return err
 	}
 	delete(peers, alias)
 	return savePrivateJSON(filepath.Join(dir, "network", "peers.json"), peers)
@@ -305,6 +325,10 @@ func networkHandler(dir string, identity networkCard) http.Handler {
 			http.Error(w, "mutual TLS required", http.StatusForbidden)
 			return
 		}
+		if r.URL.Path == networkJoinPath {
+			handleNetworkJoin(dir, identity, w, r)
+			return
+		}
 		// Recheck on every request: TLS keepalive cannot outlive revocation.
 		peer, err := authenticatedNetworkPeer(dir, *r.TLS)
 		if err != nil {
@@ -350,11 +374,23 @@ func networkHandler(dir string, identity networkCard) http.Handler {
 	})
 }
 
-func serveNetwork(ctx context.Context, dir string, listener net.Listener, identity networkIdentity, cert tls.Certificate) error {
-	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{cert}, ClientAuth: tls.RequireAnyClientCert, VerifyConnection: func(state tls.ConnectionState) error {
+func networkServerTLS(dir string, cert tls.Certificate) *tls.Config {
+	return &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{cert}, ClientAuth: tls.RequireAnyClientCert, VerifyConnection: func(state tls.ConnectionState) error {
 		_, err := authenticatedNetworkPeer(dir, state)
+		if err != nil && networkInviteAcceptsCertificate(dir, state) {
+			// This allows only the TLS handshake. Ordinary operations still
+			// require a paired certificate on every HTTP request.
+			return nil
+		}
 		return err
 	}}
+}
+
+func networkCertificateMatches(state tls.ConnectionState, certificate []byte) bool {
+	return len(state.PeerCertificates) == 1 && bytes.Equal(state.PeerCertificates[0].Raw, certificate)
+}
+
+func serveNetwork(ctx context.Context, dir string, listener net.Listener, identity networkIdentity, cert tls.Certificate) error {
 	server := &http.Server{Handler: networkHandler(dir, identity.Card), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 5 * time.Second, WriteTimeout: 5 * time.Second, IdleTimeout: 10 * time.Second, MaxHeaderBytes: 8 << 10, ErrorLog: log.New(io.Discard, "", 0)}
 	done := make(chan struct{})
 	go func() {
@@ -365,7 +401,7 @@ func serveNetwork(ctx context.Context, dir string, listener net.Listener, identi
 		}
 	}()
 	defer close(done)
-	err := server.Serve(tls.NewListener(limitListener(listener, 16), tlsConfig))
+	err := server.Serve(tls.NewListener(limitListener(listener, 16), networkServerTLS(dir, cert)))
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
 	}

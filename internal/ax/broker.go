@@ -244,6 +244,7 @@ func Serve(ctx context.Context, dir string) error {
 		return e
 	}
 	defer b.db.Close()
+	go resumeNetworkAdapter(ctx, dir)
 	done := make(chan struct{})
 	go func() {
 		select {

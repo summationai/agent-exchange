@@ -3,10 +3,12 @@ package ax
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"strings"
@@ -18,10 +20,12 @@ type terminalContext struct {
 	Kind   string `json:"kind,omitempty"`
 	Pane   string `json:"pane,omitempty"`
 	Socket string `json:"socket,omitempty"`
+	Bin    string `json:"bin,omitempty"`
 }
 
 var tmuxPane = regexp.MustCompile(`^%[0-9]+$`)
 var itermPane = regexp.MustCompile(`^[0-9A-Fa-f-]{36}$`)
+var rexBlock = regexp.MustCompile(`^block:[0-9a-f-]{36}$`)
 
 func detectTerminal() terminalContext {
 	if tmux := os.Getenv("TMUX"); tmux != "" {
@@ -31,6 +35,14 @@ func detectTerminal() terminalContext {
 			return terminalContext{Kind: "tmux", Pane: os.Getenv("TMUX_PANE"), Socket: strings.Join(parts[:len(parts)-2], ",")}
 		}
 		return terminalContext{} // Never fall back to iTerm when tmux targeting is incomplete.
+	}
+	if block := os.Getenv("REX_BLOCK"); block != "" {
+		// The Rex CLI is not always on PATH, so the launcher keeps its location for later splits.
+		server, dir := os.Getenv("REX_SERVER"), os.Getenv("REX_BIN_DIR")
+		if rexBlock.MatchString(block) && server != "" && filepath.IsAbs(dir) {
+			return terminalContext{Kind: "rex", Pane: block, Socket: server, Bin: filepath.Join(dir, "rex")}
+		}
+		return terminalContext{}
 	}
 	if runtime.GOOS == "darwin" && os.Getenv("TERM_PROGRAM") == "iTerm.app" {
 		id := os.Getenv("ITERM_SESSION_ID")
@@ -51,8 +63,11 @@ func (t terminalContext) validate() error {
 		return err
 	case t.Kind == "iterm" && runtime.GOOS == "darwin" && itermPane.MatchString(t.Pane):
 		return nil
+	case t.Kind == "rex" && rexBlock.MatchString(t.Pane) && t.Socket != "" && filepath.IsAbs(t.Bin):
+		_, err := exec.LookPath(t.Bin)
+		return err
 	default:
-		return errors.New("pane launch needs the caller's tmux or iTerm2 session; relaunch AX inside one of those terminals")
+		return errors.New("pane launch needs the caller's tmux, Rex, or iTerm2 session; relaunch AX inside one of those terminals")
 	}
 }
 
@@ -89,9 +104,16 @@ func openAgentPane(ctx context.Context, terminal terminalContext, dir, name, tok
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	var cmd *exec.Cmd
-	if terminal.Kind == "tmux" {
+	switch terminal.Kind {
+	case "tmux":
 		cmd = exec.CommandContext(ctx, "tmux", "-S", terminal.Socket, "split-window", "-h", "-d", "-P", "-F", "#{pane_id}", "-t", terminal.Pane, command)
-	} else {
+	case "rex":
+		// Rex starts the argument list in the login shell's environment without parsing it.
+		// With autostart off, a missing server is an error. Rex finds blocks only in the caller's
+		// session, taken from REX_BLOCK or REX_SESSION, so REX_BLOCK names the captured block.
+		cmd = exec.CommandContext(ctx, terminal.Bin, "split", "--autostart=false", "-S", terminal.Socket, "-b", terminal.Pane, "--split", "right", "--focus=false", "--json", "--", exe, "spawn-run", dir, name, token)
+		cmd.Env = append(os.Environ(), "REX_BLOCK="+terminal.Pane, "REX_SESSION=")
+	default:
 		cmd = exec.CommandContext(ctx, "/usr/bin/osascript", "-", terminal.Pane, "/bin/sh -c "+shellQuote(command))
 		cmd.Stdin = strings.NewReader(splitITerm)
 	}
@@ -103,7 +125,16 @@ func openAgentPane(ctx context.Context, terminal terminalContext, dir, name, tok
 		return "", fmt.Errorf("terminal launch was not confirmed: %w (%s); inspect the terminal before taking further action", err, strings.TrimSpace(stderr.String()))
 	}
 	pane := strings.TrimSpace(string(output))
-	if (terminal.Kind == "tmux" && !tmuxPane.MatchString(pane)) || (terminal.Kind == "iterm" && !itermPane.MatchString(pane)) {
+	if terminal.Kind == "rex" {
+		var created struct {
+			BlockIDs []string `json:"block_ids"`
+		}
+		pane = ""
+		if json.Unmarshal(output, &created) == nil && len(created.BlockIDs) == 1 {
+			pane = created.BlockIDs[0]
+		}
+	}
+	if (terminal.Kind == "tmux" && !tmuxPane.MatchString(pane)) || (terminal.Kind == "iterm" && !itermPane.MatchString(pane)) || (terminal.Kind == "rex" && !rexBlock.MatchString(pane)) {
 		return "", errors.New("terminal returned an unrecognized pane ID; the launch may have succeeded")
 	}
 	return pane, nil

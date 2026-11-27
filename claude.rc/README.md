@@ -39,7 +39,7 @@ Models, native prompts, and native options are forwarded. AX adds configuration 
 
 ## Launch a peer in another pane
 
-The `spawn_agent` tool and `ax spawn` command can open a named peer in the caller's tmux or iTerm2 session. Agents may use this only when you explicitly request a new agent. A task assignment or an opportunity to parallelize does not authorize a launch. See [pane launches and their limits](spawning.md).
+The `spawn_agent` tool and `ax spawn` command can open a named peer in the caller's tmux, Rex, or iTerm2 session. Agents may use this only when you explicitly request a new agent. A task assignment or an opportunity to parallelize does not authorize a launch. See [pane launches and their limits](spawning.md).
 
 ## Permissions and delegation
 
